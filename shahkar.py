@@ -6,11 +6,6 @@ Pullback entry, gem crash exemption, hard time block.
 import asyncio, sys, os
 from datetime import datetime
 
-# ── DEBUG — remove after Redis fix ───────────────────────────
-_redis_debug = os.getenv("REDIS_URL", "NOT_SET_AT_ALL")
-print(f"DEBUG REDIS_URL = '{_redis_debug}'")
-# ─────────────────────────────────────────────────────────────
-
 sys.path.insert(0, os.path.dirname(__file__))
 
 if sys.platform == "win32":
