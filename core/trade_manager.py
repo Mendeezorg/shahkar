@@ -1,49 +1,51 @@
 """
 core/trade_manager.py
-Trade manager with pullback entry support and gem flags.
+Trade manager with Redis persistence.
+Trades survive Railway restarts/redeploys.
 """
 import json, os, time
 from datetime import datetime
 import config
 from utils.logger import log
 
-TRADES_FILE  = "logs/open_trades.json"
 HISTORY_FILE = "logs/trade_history.json"
-PENDING_FILE = "logs/pending_entries.json"
 
 
 class TradeManager:
     def __init__(self, exchange, guard):
         self.ex      = exchange
         self.guard   = guard
-        self.trades  = self._load(TRADES_FILE, {})
-        self.pending = self._load(PENDING_FILE, {})
+        # Load from Redis — survive restarts
+        from utils.state import state
+        self.state   = state
+        self.trades  = self.state.get("open_trades") or {}
+        self.pending = self.state.get("pending_entries") or {}
+        log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades from Redis")
 
-    def _load(self, path, default):
-        try:
-            if os.path.exists(path):
-                with open(path) as f:
-                    return json.load(f)
-        except Exception:
-            pass
-        return default
+    def _save_trades(self):
+        self.state.set("open_trades", self.trades, expiry=86400)
 
-    def _save(self, path, data):
-        os.makedirs("logs", exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2, default=str)
+    def _save_pending(self):
+        self.state.set("pending_entries", self.pending, expiry=3600)
 
     def _save_history(self, trade: dict):
-        history = self._load(HISTORY_FILE, [])
+        history = self.state.get("trade_history") or []
         history.append(trade)
-        self._save(HISTORY_FILE, history)
+        history = history[-200:]  # Keep last 200
+        self.state.set("trade_history", history, expiry=2592000)  # 30 days
+        # Also save to file as backup
+        try:
+            os.makedirs("logs", exist_ok=True)
+            with open(HISTORY_FILE, "w") as f:
+                json.dump(history, f, indent=2, default=str)
+        except Exception:
+            pass
 
     # ── Pullback pending entries ──────────────────────────────
 
     def add_pending_entry(self, symbol: str, pullback_price: float,
                            score: int, capital: float, is_gem: bool):
-        """Save pending entry — will execute when price drops to pullback_price."""
-        expires = time.time() + 300   # 5 minutes
+        expires = time.time() + 300
         self.pending[symbol] = {
             "symbol":         symbol,
             "pullback_price": pullback_price,
@@ -53,40 +55,36 @@ class TradeManager:
             "expires":        expires,
             "created":        datetime.utcnow().isoformat(),
         }
-        self._save(PENDING_FILE, self.pending)
+        self._save_pending()
         log.info(f"PENDING ENTRY  {symbol}  wait_price={pullback_price}  expires=5min")
 
     async def check_pending_entries(self, current_prices: dict):
-        """Check if any pending entries hit their pullback price."""
-        now = time.time()
+        now     = time.time()
         expired = []
         executed = []
 
         for sym, entry in list(self.pending.items()):
-            # Expired?
             if now > entry["expires"]:
                 expired.append(sym)
-                log.info(f"PENDING EXPIRED  {sym} — price never pulled back")
+                log.info(f"PENDING EXPIRED  {sym}")
                 continue
 
             current = current_prices.get(sym, 0)
             if current <= 0:
                 continue
 
-            # Hit pullback price?
             if current <= entry["pullback_price"]:
-                log.info(f"PULLBACK HIT  {sym}  price={current}  target={entry['pullback_price']}")
+                log.info(f"PULLBACK HIT  {sym}  price={current}")
                 success = await self.open_trade(
                     sym, entry["score"], entry["capital"], entry["is_gem"]
                 )
                 if success:
                     executed.append(sym)
 
-        # Clean up
         for sym in expired + executed:
             self.pending.pop(sym, None)
         if expired or executed:
-            self._save(PENDING_FILE, self.pending)
+            self._save_pending()
 
     # ── Open trade ────────────────────────────────────────────
 
@@ -127,7 +125,7 @@ class TradeManager:
             "partial_target": round(price * (1 + config.PARTIAL_EXIT_PCT), 8),
             "mode":           config.MODE,
         }
-        self._save(TRADES_FILE, self.trades)
+        self._save_trades()
         log.info(f"ENTRY  {symbol}  price={price}  qty={qty:.6f}  score={score}  gem={is_gem}")
         return True
 
@@ -142,27 +140,23 @@ class TradeManager:
 
                 if current_price > t["highest_price"]:
                     t["highest_price"] = current_price
-                    self._save(TRADES_FILE, self.trades)
+                    self._save_trades()
 
                 pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
 
-                # Hard SL
                 if self.guard.check_stop_loss(t["entry_price"], current_price):
                     await self._close_trade(symbol, current_price, "stop_loss")
                     continue
 
-                # Trailing stop (after partial)
                 if t["partial_done"]:
                     if self.guard.check_trailing_stop(t["highest_price"], current_price):
                         await self._close_trade(symbol, current_price, "trailing_stop")
                         continue
 
-                # Partial exit at +3%
                 if not t["partial_done"] and current_price >= t["partial_target"]:
                     await self._partial_exit(symbol, current_price)
                     continue
 
-                # Full target
                 if current_price >= t["target"]:
                     await self._close_trade(symbol, current_price, "target_hit")
                     continue
@@ -179,8 +173,8 @@ class TradeManager:
         pnl = (price - t["entry_price"]) * sell_qty
         t["partial_done"]  = True
         t["remaining_qty"] = round(t["qty"] - sell_qty, 6)
-        t["stop_loss"]     = t["entry_price"]   # Move to breakeven
-        self._save(TRADES_FILE, self.trades)
+        t["stop_loss"]     = t["entry_price"]
+        self._save_trades()
         log.info(f"PARTIAL EXIT  {symbol}  30% at {price}  pnl=+${pnl:.3f}")
 
     async def _close_trade(self, symbol: str, price: float, reason: str):
@@ -194,7 +188,7 @@ class TradeManager:
                    "reason": reason, "win": pnl > 0}
         self._save_history(closed)
         del self.trades[symbol]
-        self._save(TRADES_FILE, self.trades)
+        self._save_trades()
         if pnl < 0:
             self.guard.record_loss(abs(pnl))
             log.warning(f"EXIT LOSS   {symbol}  ${pnl:.3f} ({pnl_pct:.2f}%)  {reason}")
