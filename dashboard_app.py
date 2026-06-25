@@ -85,7 +85,6 @@ def get_btc():
 
 
 def get_dashboard_data():
-    log.info(f"DASHBOARD DEBUG: use_redis={state.use_redis}")
     redis_data = state.get_all_dashboard_data()
     btc        = get_btc()
 
