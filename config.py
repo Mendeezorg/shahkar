@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=False)
 
 # ── Binance API ──────────────────────────────────────────────
 API_KEY    = os.getenv("BINANCE_API_KEY", "")
