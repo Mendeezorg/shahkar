@@ -6,6 +6,11 @@ Pullback entry, gem crash exemption, hard time block.
 import asyncio, sys, os
 from datetime import datetime
 
+# ── DEBUG — remove after Redis fix ───────────────────────────
+_redis_debug = os.getenv("REDIS_URL", "NOT_SET_AT_ALL")
+print(f"DEBUG REDIS_URL = '{_redis_debug}'")
+# ─────────────────────────────────────────────────────────────
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 if sys.platform == "win32":
@@ -85,7 +90,6 @@ async def main():
     print(BANNER)
     log.info(f"SHAHKAR v22 starting — MODE={config.MODE.upper()}")
 
-    # ── Init async client ─────────────────────────────────────
     async_client = await get_async_client()
     exchange     = Exchange(async_client)
     scanner      = Scanner(async_client)
@@ -113,7 +117,6 @@ async def main():
             hour   = now.hour
             minute = now.minute
 
-            # ── HARD time block ───────────────────────────────
             if not guard.is_trading_allowed():
                 log.info(f"HARD BLOCK  {hour} UTC — sleeping 5 min")
                 await asyncio.sleep(300)
@@ -121,13 +124,11 @@ async def main():
 
             log.info(f"CYCLE {cycle} START")
 
-            # ── Halt check ────────────────────────────────────
             if guard.is_halted():
                 log.error("DAILY LIMIT HIT — sleeping 1hr")
                 await asyncio.sleep(3600)
                 continue
 
-            # ── Risk check ────────────────────────────────────
             should_stop, stop_reason = risk.should_stop_trading()
             if should_stop:
                 log.error(f"RISK STOP — {stop_reason}")
@@ -135,7 +136,6 @@ async def main():
                 await asyncio.sleep(300)
                 continue
 
-            # ── News emergency ────────────────────────────────
             close_all, close_reason = news_engine.should_close_all()
             if close_all:
                 log.error(f"NEWS EMERGENCY — {close_reason}")
@@ -144,7 +144,6 @@ async def main():
                 await asyncio.sleep(60)
                 continue
 
-            # ── BTC Intelligence ──────────────────────────────
             btc = await btc_ai.get_btc_data()
             if not btc.get("ok"):
                 await asyncio.sleep(30)
@@ -159,11 +158,8 @@ async def main():
             )
 
             await push_state(btc, guard, tm, memory, news_engine, risk, inst)
-
-            # ── Monitor existing trades ───────────────────────
             await tm.monitor_trades()
 
-            # ── Check pending pullback entries ────────────────
             try:
                 tickers = await async_client.get_all_tickers()
                 prices  = {t["symbol"]: float(t["price"]) for t in tickers}
@@ -171,7 +167,6 @@ async def main():
             except Exception as e:
                 log.error(f"Pending entries check failed: {e}")
 
-            # ── Entry check ───────────────────────────────────
             can_enter, reason = guard.can_enter_trade(
                 hour, minute,
                 btc_change_5m=btc.get("change_5m", 0),
@@ -187,14 +182,12 @@ async def main():
                 await asyncio.sleep(config.SCAN_INTERVAL_SEC)
                 continue
 
-            # ── ASYNC FULL BOARD SCAN ─────────────────────────
             candidates   = await scanner.scan_full_board_async()
             gem_set      = scanner.find_decoupled_gems(candidates, btc["change_24h"])
             news_boost   = news_engine.get_score_boost()
             inst_bonus   = inst.get_score_bonus()
             chain_bonus  = whale_chain.get_score_bonus("BTCUSDT")
 
-            # Priority: gems first
             priority = [c for c in candidates if c["symbol"] in gem_set]
             rest     = [c for c in candidates if c["symbol"] not in gem_set]
             sorted_candidates = priority + rest
@@ -206,7 +199,6 @@ async def main():
                 if tm.is_open(sym) or tm.is_pending(sym):
                     continue
 
-                # News block
                 blocked, block_reason = news_engine.should_block_entry(sym)
                 if blocked:
                     log.warning(f"NEWS BLOCK {sym} — {block_reason}")
@@ -214,38 +206,33 @@ async def main():
 
                 is_gem = sym in gem_set
 
-                # Quick score without order book
                 result = scorer.score(
-                    symbol     = sym,
-                    candidate  = coin,
-                    btc_trend  = btc["trend"],
+                    symbol       = sym,
+                    candidate    = coin,
+                    btc_trend    = btc["trend"],
                     whale_signal = "neutral",
-                    is_gem     = is_gem,
-                    hour_utc   = hour,
-                    ob_bonus   = 0.0,
+                    is_gem       = is_gem,
+                    hour_utc     = hour,
+                    ob_bonus     = 0.0,
                 )
 
-                # Apply bonuses
                 adjusted = result["score"] + news_boost + inst_bonus + chain_bonus
                 result["score"] = max(0, min(100, int(adjusted)))
 
                 if result["score"] < config.MIN_SCORE:
                     continue
 
-                # ── Enrich with order book (only top scorers) ─
                 ob_data = await scanner.enrich_candidate(sym)
                 if ob_data.get("signal") == "skip":
                     log.info(f"SKIP {sym} — {ob_data.get('reason','spread too wide')}")
                     continue
 
-                # Final score with order book
                 final = result["score"] + ob_data.get("score_bonus", 0)
                 result["score"] = max(0, min(100, int(final)))
 
                 if result["score"] < config.MIN_SCORE:
                     continue
 
-                # RR check
                 price = coin.get("price", 0)
                 if price <= 0:
                     continue
@@ -258,7 +245,6 @@ async def main():
 
                 approved.append({**result, "rr": round(rr, 1), "coin": coin})
 
-            # Sort by score
             approved.sort(key=lambda x: x["score"], reverse=True)
 
             for r in approved:
@@ -269,7 +255,6 @@ async def main():
                 is_gem = r["is_gem"]
                 coin   = r["coin"]
 
-                # Check if needs pullback entry
                 needs_pullback, pullback_price = scorer.needs_pullback_entry(coin)
 
                 capital = risk.calculate_position_size(
@@ -286,7 +271,6 @@ async def main():
                     log.info(f"APPROVED {sym} score={r['score']} RR={r['rr']}:1 gem={is_gem} capital=${capital}")
                     await tm.open_trade(sym, r["score"], capital, is_gem)
 
-            # Self-learn every 10 cycles
             if cycle % 10 == 0:
                 memory.learn()
 
