@@ -1,3 +1,6 @@
+def get_dashboard_data():
+    print(f"DASHBOARD DEBUG: use_redis={state.use_redis}")  # ADD THIS
+    redis_data = state.get_all_dashboard_data()
 """
 dashboard_app.py — SHAHKAR Dashboard for Railway
 Reads PORT from environment variable (Railway sets this automatically)
