@@ -21,7 +21,11 @@ class StateManager:
             return
         try:
             import redis as _redis
-            self.redis = _redis.from_url(redis_url, decode_responses=True)
+            self.redis = _redis.from_url(
+    redis_url,
+    decode_responses=True,
+    ssl_cert_reqs=None
+)
             self.redis.ping()
             self.use_redis = True
             log.info("STATE  Redis connected!")
