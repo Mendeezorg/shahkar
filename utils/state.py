@@ -11,7 +11,7 @@ class StateManager:
         self.redis     = None
         self.use_redis = False
         self._file     = "shahkar_state.json"
-        self._mem      = {}   # in-memory fallback
+        self._mem      = {}
         self._connect_redis()
 
     def _connect_redis(self):
@@ -21,18 +21,29 @@ class StateManager:
             return
         try:
             import redis as _redis
-            self.redis = _redis.from_url(
-    redis_url,
-    decode_responses=True,
-    ssl_cert_reqs=None
-)
+            # Upstash uses rediss:// (TLS) — need ssl=True
+            if redis_url.startswith("rediss://"):
+                self.redis = _redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    ssl=True,
+                    ssl_cert_reqs=None,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
+            else:
+                self.redis = _redis.from_url(
+                    redis_url,
+                    decode_responses=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                )
             self.redis.ping()
             self.use_redis = True
             log.info("STATE  Redis connected!")
         except Exception as e:
             log.warning(f"STATE  Redis failed ({e}) — using file storage")
 
-    # ── File helpers ──────────────────────────────────────────
     def _read_file(self) -> dict:
         try:
             if os.path.exists(self._file):
@@ -49,7 +60,6 @@ class StateManager:
         except Exception as e:
             log.error(f"STATE file write error: {e}")
 
-    # ── Public API ────────────────────────────────────────────
     def set(self, key: str, value, expiry: int = 3600):
         try:
             if self.use_redis:
@@ -68,13 +78,11 @@ class StateManager:
                 v = self.redis.get(key)
                 return json.loads(v) if v else None
             else:
-                # Try memory first
                 if key in self._mem:
                     return self._mem[key]
                 data = self._read_file()
                 entry = data.get(key)
                 if entry:
-                    # Check TTL
                     if time.time() - entry["t"] < entry["ttl"]:
                         self._mem[key] = entry["v"]
                         return entry["v"]
@@ -94,7 +102,6 @@ class StateManager:
         except Exception as e:
             log.error(f"STATE delete error: {e}")
 
-    # ── Convenience wrappers ──────────────────────────────────
     def update_btc(self, d):        self.set("btc", d, 60)
     def update_stats(self, d):      self.set("stats", d, 300)
     def update_trades(self, d):     self.set("trades", d, 300)
