@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from flask import Flask, render_template
 from flask_socketio import SocketIO
 from utils.state import state
+from utils.logger import log
 
 app = Flask(__name__,
     template_folder="dashboard/templates",
@@ -84,7 +85,7 @@ def get_btc():
 
 
 def get_dashboard_data():
-    print(f"DASHBOARD DEBUG: use_redis={state.use_redis}")
+    log.info(f"DASHBOARD DEBUG: use_redis={state.use_redis}")
     redis_data = state.get_all_dashboard_data()
     btc        = get_btc()
 
@@ -169,6 +170,6 @@ if __name__ == "__main__":
     threading.Thread(target=news_loop,  daemon=True).start()
     threading.Thread(target=push_loop,  daemon=True).start()
 
-    print(f"\nSHAHKAR Dashboard → http://0.0.0.0:{port}\n")
+    log.info(f"SHAHKAR Dashboard starting on port {port}")
     socketio.run(app, host="0.0.0.0", port=port, debug=False,
                  allow_unsafe_werkzeug=True)
