@@ -1,4 +1,16 @@
 import logging, os, sys
+from collections import deque
+
+# In-memory log buffer for dashboard
+_log_buffer = deque(maxlen=100)
+
+class BufferHandler(logging.Handler):
+    def emit(self, record):
+        msg = self.format(record)
+        _log_buffer.append(msg)
+
+def get_log_buffer():
+    return list(_log_buffer)
 
 def get_logger(name="SHAHKAR"):
     os.makedirs("logs", exist_ok=True)
@@ -12,17 +24,28 @@ def get_logger(name="SHAHKAR"):
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console — Windows safe encoding
+    # Console
     ch = logging.StreamHandler(sys.stdout)
     ch.setFormatter(fmt)
-    ch.stream = open(sys.stdout.fileno(), mode='w',
-                     encoding='utf-8', errors='replace', closefd=False)
+    try:
+        ch.stream = open(sys.stdout.fileno(), mode='w',
+                         encoding='utf-8', errors='replace', closefd=False)
+    except Exception:
+        pass
     logger.addHandler(ch)
 
     # File
-    fh = logging.FileHandler("logs/shahkar.log", encoding='utf-8')
-    fh.setFormatter(fmt)
-    logger.addHandler(fh)
+    try:
+        fh = logging.FileHandler("logs/shahkar.log", encoding='utf-8')
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
+    except Exception:
+        pass
+
+    # Memory buffer for dashboard
+    bh = BufferHandler()
+    bh.setFormatter(fmt)
+    logger.addHandler(bh)
 
     return logger
 
