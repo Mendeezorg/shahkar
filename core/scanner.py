@@ -195,9 +195,10 @@ class Scanner:
             coin_chg = c.get("change", 0)
             edge     = coin_chg - btc_change
             # BTC flat/down + coin significantly up
+            # Must have ACTUAL upward movement — flat coins (dead) excluded
             if btc_change <= 1.0 and coin_chg >= 3.0 and edge >= 2.0:
                 gems.add(c["symbol"])
-            elif btc_change < -1.0 and coin_chg >= 2.0:
+            elif btc_change < -1.0 and coin_chg >= 1.5:
                 gems.add(c["symbol"])
         if gems:
             log.info(f"GEMS  {len(gems)} decoupled: {list(gems)[:8]}")
