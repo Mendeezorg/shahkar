@@ -1,9 +1,6 @@
 """
 core/trade_manager.py
-Trade manager — fixed:
-1. Live PnL calculated on every monitor cycle
-2. Saves to both Redis (open_trades + trades keys) and file
-3. trade_history saved on every close
+Fixed: Dead coin detection + blacklist + live PnL
 """
 import json, os, time
 from datetime import datetime
@@ -44,7 +41,6 @@ class TradeManager:
         log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades")
 
     def _save_trades(self):
-        """Save to Redis (both keys) AND file."""
         self.state.set("open_trades", self.trades, expiry=86400)
         self.state.set("trades", self.trades, expiry=86400)
         _save_json(OPEN_TRADES_FILE, self.trades)
@@ -60,6 +56,24 @@ class TradeManager:
         history = history[-200:]
         _save_json(HISTORY_FILE, history)
         self.state.set("trade_history", history, expiry=2592000)
+
+    def get_blacklist(self) -> dict:
+        bl = self.state.get("blacklist") or {}
+        now = time.time()
+        active = {k: v for k, v in bl.items() if v > now}
+        if len(active) != len(bl):
+            self.state.set("blacklist", active, expiry=86400)
+        return active
+
+    def add_to_blacklist(self, symbol: str, hours: int = 24):
+        bl = self.state.get("blacklist") or {}
+        bl[symbol] = time.time() + (hours * 3600)
+        self.state.set("blacklist", bl, expiry=86400)
+        log.warning(f"BLACKLISTED  {symbol}  for {hours}h")
+
+    def is_blacklisted(self, symbol: str) -> bool:
+        bl = self.get_blacklist()
+        return symbol in bl
 
     def add_pending_entry(self, symbol: str, pullback_price: float,
                            score: int, capital: float, is_gem: bool):
@@ -111,6 +125,9 @@ class TradeManager:
         if len(self.trades) >= config.MAX_OPEN_TRADES:
             log.warning(f"Max trades reached — SKIP {symbol}")
             return False
+        if self.is_blacklisted(symbol):
+            log.warning(f"BLACKLISTED — SKIP {symbol}")
+            return False
 
         if self.guard.should_reduce_size():
             capital *= 0.5
@@ -153,13 +170,34 @@ class TradeManager:
         if not self.trades:
             return
 
+        # Get ALL tickers in one API call — check volume
+        try:
+            all_tickers = await self.ex.client.get_ticker()
+            ticker_map  = {t["symbol"]: t for t in all_tickers}
+        except Exception as e:
+            log.error(f"Failed to get tickers: {e}")
+            ticker_map = {}
+
         for symbol in list(self.trades.keys()):
             try:
                 t = self.trades[symbol]
-                ticker = await self.ex.client.get_symbol_ticker(symbol=symbol)
-                current_price = float(ticker["price"])
 
-                # Update live price AND pnl every cycle
+                if symbol not in ticker_map:
+                    log.warning(f"DEAD COIN  {symbol} — not in ticker map")
+                    continue
+
+                ticker_data   = ticker_map[symbol]
+                current_price = float(ticker_data["price"])
+                volume_24h    = float(ticker_data.get("quoteVolume", 0))
+
+                # DEAD COIN KILL SWITCH
+                if volume_24h < 10000:
+                    log.warning(f"DEAD COIN  {symbol}  vol=${volume_24h:.0f} — closing & blacklisting")
+                    await self._close_trade(symbol, current_price, "dead_coin")
+                    self.add_to_blacklist(symbol, hours=24)
+                    continue
+
+                # Update live PnL
                 t["current_price"] = current_price
                 pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
                 pnl     = (current_price - t["entry_price"]) * t["remaining_qty"]
@@ -205,6 +243,8 @@ class TradeManager:
         log.info(f"PARTIAL EXIT  {symbol}  30% at {price}  pnl=+${pnl:.3f}")
 
     async def _close_trade(self, symbol: str, price: float, reason: str):
+        if symbol not in self.trades:
+            return
         t   = self.trades[symbol]
         qty = t["remaining_qty"]
 
