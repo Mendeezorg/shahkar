@@ -57,6 +57,7 @@ async def push_state(btc, guard, tm, memory, news_engine, risk, inst):
             "halted":        guard.is_halted(),
             "news_mood":     news_engine.market_mood.get("mood", "neutral"),
             "mode":          config.MODE.upper(),
+            "max_trades":    config.MAX_OPEN_TRADES,
             "drawdown":      risk.get_drawdown(),
             "inst_signal":   inst.data.get("signal", "neutral"),
             "fear_greed":    inst.data.get("fear_greed", {}).get("value", 50),
