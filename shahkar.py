@@ -6,6 +6,11 @@ Pullback entry, gem crash exemption, hard time block.
 import asyncio, sys, os
 from datetime import datetime
 
+# ── DEBUG — remove after Redis fix ───────────────────────────
+_redis_debug = os.getenv("REDIS_URL", "NOT_SET_AT_ALL")
+print(f"DEBUG REDIS_URL = '{_redis_debug}'")
+# ─────────────────────────────────────────────────────────────
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 if sys.platform == "win32":
@@ -71,10 +76,8 @@ async def push_state(btc, guard, tm, memory, news_engine, risk, inst):
         })
         state.set("shahkar_history", {"trades": memory.history[-20:][::-1]})
         try:
-            if os.path.exists("logs/shahkar.log"):
-                with open("logs/shahkar.log", encoding="utf-8", errors="replace") as f:
-                    lines = f.readlines()
-                state.update_logs([l.strip() for l in lines[-40:]])
+            from utils.logger import get_log_buffer
+            state.update_logs(get_log_buffer()[-40:])
         except Exception:
             pass
     except Exception as e:
