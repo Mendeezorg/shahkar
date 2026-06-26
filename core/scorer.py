@@ -1,8 +1,8 @@
 """
 core/scorer.py
-SHAHKAR Score Engine v3
-New weights: max base = 92
-Simple pattern replaces ML (higher highs, bullish engulfing, rising volume)
+SHAHKAR Score Engine v4
+Fix: Gems always enter immediately (no pullback wait)
+Fix: Pullback timeout reduced — miss kam hoga
 """
 import config
 from utils.logger import log
@@ -69,7 +69,7 @@ class ScoreEngine:
         elif btc_trend == "sideways":
             pts = config.INDICATOR_WEIGHTS["btc_trend"] * 0.5
         elif is_gem:
-            pts = config.INDICATOR_WEIGHTS["btc_trend"] * 0.4   # Gem survives BTC down
+            pts = config.INDICATOR_WEIGHTS["btc_trend"] * 0.4
         else:
             pts = 0
         breakdown["btc_trend"] = {"value": btc_trend, "pts": round(pts, 1), "pass": pts > 0}
@@ -97,7 +97,6 @@ class ScoreEngine:
             total += 25
             breakdown["gem_bonus"] = {"pts": 25, "pass": True}
 
-        # Order book bonus
         total += ob_bonus
         if ob_bonus != 0:
             breakdown["orderbook"] = {"pts": round(ob_bonus, 1), "pass": ob_bonus > 0}
@@ -120,20 +119,22 @@ class ScoreEngine:
             "reason":    "approved" if passed else f"score_{final}_below_{config.MIN_SCORE}",
         }
 
-    def needs_pullback_entry(self, candidate: dict) -> tuple[bool, float]:
+    def needs_pullback_entry(self, candidate: dict, is_gem: bool = False) -> tuple[bool, float]:
         """
-        If last 5m candle pumped >= 2.5%, wait for pullback.
-        Returns (True, pump_high) or (False, 0)
+        Gems NEVER wait for pullback — they pump fast, no time to wait.
+        Normal coins: only wait if candle pumped >= 3%
         """
+        if is_gem:
+            return False, 0.0
+
         chg = candidate.get("candle_chg", 0)
-        if chg >= 2.5:
+        if chg >= 3.0:
             pump_high = candidate.get("price", 0)
             pullback_price = round(pump_high * (1 - config.PUMP_PULLBACK_PCT), 8)
-            log.info(f"PULLBACK ENTRY  pump_high={pump_high}  wait for={pullback_price}")
+            log.info(f"PULLBACK ENTRY  pump={chg:.1f}%  wait for={pullback_price}")
             return True, pullback_price
-        return False, 0.0
 
-    # ── Technical helpers ─────────────────────────────────────
+        return False, 0.0
 
     def _calc_rsi(self, klines: list, period: int = 14) -> float:
         import numpy as np
@@ -172,10 +173,6 @@ class ScoreEngine:
             return {"cross_up": False, "hist": 0, "macd": 0}
 
     def _simple_pattern(self, klines: list) -> dict:
-        """
-        Simple patterns: higher highs/lows, bullish engulfing, rising volume.
-        Returns {"name": str, "strength": 0.0-1.0}
-        """
         try:
             if len(klines) < 6:
                 return {"name": "none", "strength": 0}
@@ -186,18 +183,15 @@ class ScoreEngine:
             lows    = [float(k[3]) for k in klines]
             volumes = [float(k[5]) for k in klines]
 
-            # Higher highs and higher lows (last 4 candles)
             hh = highs[-1] > highs[-2] > highs[-3]
             hl = lows[-1]  > lows[-2]  > lows[-3]
             higher_highs_lows = hh and hl
 
-            # Bullish engulfing (last 2 candles)
-            prev_bearish  = closes[-2] < opens[-2]
-            curr_bullish  = closes[-1] > opens[-1]
-            curr_engulfs  = opens[-1] <= closes[-2] and closes[-1] >= opens[-2]
-            engulfing     = prev_bearish and curr_bullish and curr_engulfs
+            prev_bearish = closes[-2] < opens[-2]
+            curr_bullish = closes[-1] > opens[-1]
+            curr_engulfs = opens[-1] <= closes[-2] and closes[-1] >= opens[-2]
+            engulfing    = prev_bearish and curr_bullish and curr_engulfs
 
-            # Rising volume on green candles
             green_vol = all(
                 volumes[-i] > volumes[-i-1]
                 for i in range(1, 4)
