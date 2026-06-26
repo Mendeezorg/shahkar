@@ -6,11 +6,6 @@ Pullback entry, gem crash exemption, hard time block.
 import asyncio, sys, os
 from datetime import datetime
 
-# ── DEBUG — remove after Redis fix ───────────────────────────
-_redis_debug = os.getenv("REDIS_URL", "NOT_SET_AT_ALL")
-print(f"DEBUG REDIS_URL = '{_redis_debug}'")
-# ─────────────────────────────────────────────────────────────
-
 sys.path.insert(0, os.path.dirname(__file__))
 
 if sys.platform == "win32":
@@ -156,7 +151,7 @@ async def main():
             log.info(
                 f"BTC ${btc['price']:,.0f} ({btc['change_24h']:+.1f}%)  "
                 f"trend={btc['trend']}  "
-                f"Trades:{tm.open_count()}/3  "
+                f"Trades:{tm.open_count()}/{config.MAX_OPEN_TRADES}  "
                 f"Loss:${guard.daily_loss_used():.2f}  "
                 f"DD:{risk.get_drawdown():.1f}%"
             )
