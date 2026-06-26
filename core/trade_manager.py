@@ -38,7 +38,7 @@ class TradeManager:
         self.guard   = guard
         from utils.state import state
         self.state   = state
-        self.trades  = _load_json(OPEN_TRADES_FILE, {})
+        self.trades  = self.state.get("open_trades") or _load_json(OPEN_TRADES_FILE, {})
         self.pending = self.state.get("pending_entries") or {}
         log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades")
 
