@@ -258,7 +258,8 @@ async def main():
                 is_gem = r["is_gem"]
                 coin   = r["coin"]
 
-                needs_pullback, pullback_price = scorer.needs_pullback_entry(coin)
+                # ✅ FIX: gems ko is_gem pass karo — immediate entry
+                needs_pullback, pullback_price = scorer.needs_pullback_entry(coin, is_gem=is_gem)
 
                 capital = risk.calculate_position_size(
                     base_capital     = config.CAPITAL_PER_TRADE,
