@@ -41,13 +41,6 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
 .tc-fill{height:100%;border-radius:3px;background:var(--teal);}
 .tc-labels{display:flex;justify-content:space-between;font-size:9px;color:var(--muted);margin-top:2px;}
 .empty{text-align:center;color:var(--muted);padding:20px;font-size:11px;}
-.scan-row{display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border);font-size:11px;}
-.scan-row:last-child{border-bottom:none;}
-.sb{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;}
-.sb-p{background:rgba(63,185,80,0.2);color:var(--green);}
-.sb-s{background:var(--bg3);color:var(--muted);}
-.sbar{flex:1;height:3px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:0 6px;}
-.sbar-f{height:100%;border-radius:2px;}
 .news-item{padding:6px 0;border-bottom:1px solid var(--border);font-size:11px;}
 .news-item:last-child{border-bottom:none;}
 .nb{font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;margin-right:5px;}
@@ -93,7 +86,6 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
 </div>
 
 <div class="main">
-  <!-- TOP METRICS -->
   <div class="grid4">
     <div class="mc"><div class="mc-label">Portfolio</div><div class="mc-val green" id="m-portfolio">--</div><div class="mc-sub" id="m-port-sub">Loading...</div></div>
     <div class="mc"><div class="mc-label">Today P&L</div><div class="mc-val" id="m-pnl">--</div><div class="mc-sub" id="m-pnl-sub">--</div></div>
@@ -105,14 +97,11 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
     <div class="mc"><div class="mc-label">News Mood</div><div class="mc-val" id="m-news">--</div><div class="mc-sub" id="m-news-sub">Loading...</div></div>
   </div>
 
-  <!-- ROW 1 -->
   <div class="grid3">
-    <!-- Active Trades -->
     <div class="panel">
       <div class="panel-title">Active Trades</div>
       <div id="active-trades"><div class="empty">No open trades yet<br>Bot is scanning...</div></div>
     </div>
-    <!-- Protection -->
     <div class="panel">
       <div class="panel-title">Protection Status</div>
       <div class="row"><span class="rl">Hard SL</span><span class="green">-2% Armed</span></div>
@@ -124,29 +113,26 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
       <div class="row"><span class="rl">Status</span><span id="p-status" class="green">Operational</span></div>
       <div class="status-box sb-safe" id="p-box">All shields active</div>
     </div>
-    <!-- Self Learning Weights -->
     <div class="panel">
       <div class="panel-title">Self-Learning Weights</div>
       <div id="weights-list">
-        <div class="wt-row"><span class="wt-name">Whale Accumulation</span><div class="wt-bar"><div class="wt-fill" style="width:94%"></div></div><span class="wt-val">18.8</span></div>
-        <div class="wt-row"><span class="wt-name">Volume Spike</span><div class="wt-bar"><div class="wt-fill" style="width:86%"></div></div><span class="wt-val">17.2</span></div>
-        <div class="wt-row"><span class="wt-name">ML Pattern</span><div class="wt-bar"><div class="wt-fill" style="width:70%"></div></div><span class="wt-val">14.0</span></div>
-        <div class="wt-row"><span class="wt-name">MACD Cross</span><div class="wt-bar"><div class="wt-fill" style="width:62%"></div></div><span class="wt-val">12.4</span></div>
-        <div class="wt-row"><span class="wt-name">BTC Trend</span><div class="wt-bar"><div class="wt-fill" style="width:56%"></div></div><span class="wt-val">11.1</span></div>
-        <div class="wt-row"><span class="wt-name">RSI Zone</span><div class="wt-bar"><div class="wt-fill" style="width:49%"></div></div><span class="wt-val">9.8</span></div>
+        <div class="wt-row"><span class="wt-name">Whale Dark Pool</span><div class="wt-bar"><div class="wt-fill" style="width:100%"></div></div><span class="wt-val">22.0</span></div>
+        <div class="wt-row"><span class="wt-name">Volume Spike</span><div class="wt-bar"><div class="wt-fill" style="width:91%"></div></div><span class="wt-val">20.0</span></div>
+        <div class="wt-row"><span class="wt-name">Macd</span><div class="wt-bar"><div class="wt-fill" style="width:68%"></div></div><span class="wt-val">15.0</span></div>
+        <div class="wt-row"><span class="wt-name">Rsi</span><div class="wt-bar"><div class="wt-fill" style="width:55%"></div></div><span class="wt-val">12.0</span></div>
+        <div class="wt-row"><span class="wt-name">Btc Trend</span><div class="wt-bar"><div class="wt-fill" style="width:59%"></div></div><span class="wt-val">13.0</span></div>
+        <div class="wt-row"><span class="wt-name">Momentum</span><div class="wt-bar"><div class="wt-fill" style="width:45%"></div></div><span class="wt-val">10.0</span></div>
+        <div class="wt-row"><span class="wt-name">Simple Pattern</span><div class="wt-bar"><div class="wt-fill" style="width:45%"></div></div><span class="wt-val">10.0</span></div>
       </div>
       <div style="margin-top:8px;padding:5px 8px;background:var(--bg3);border-radius:5px;font-size:10px;color:var(--muted);">Auto-adjusts after every 10 trades</div>
     </div>
   </div>
 
-  <!-- ROW 2 -->
   <div class="grid2">
-    <!-- Live Log -->
     <div class="panel">
       <div class="panel-title">Live Bot Log</div>
       <div class="log-box" id="log-box"><div class="log-line log-m">Connecting to bot...</div></div>
     </div>
-    <!-- News Feed -->
     <div class="panel">
       <div class="panel-title">News AI Feed — Groq Analyzed</div>
       <div style="display:flex;justify-content:space-between;margin-bottom:8px;font-size:11px;">
@@ -157,7 +143,6 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
     </div>
   </div>
 
-  <!-- ROW 3 Trade History -->
   <div class="panel" style="margin-bottom:10px;">
     <div class="panel-title">Trade History</div>
     <div style="overflow-x:auto;">
@@ -175,7 +160,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',sans-serif;fo
     <span class="lp">L4</span><span class="lp">L5</span><span class="lp">L6</span>
     <span class="lp">L7</span><span class="lp">L8</span><span class="lp">L9 News AI</span>
   </div>
-  <span>SHAHKAR v1.0 — Sirf Jeetna Hai &#9889;</span>
+  <span>SHAHKAR v22 — Sirf Jeetna Hai &#9889;</span>
 </div>
 
 <script>
@@ -187,31 +172,29 @@ function updateAll(data){
   const s = data.stats || {};
   const n = data.news  || {};
 
-  // Timestamp
   if(data.timestamp) document.getElementById("timestamp").textContent = data.timestamp;
 
-  // Top metrics — only update if real data
-  const pnl = s.total_pnl || 0;
-  const port = 1000 + pnl;
+  const pnl  = s.total_pnl || 0;
+  const port  = 1000 + pnl;
   set("m-portfolio", "$" + port.toFixed(2), pnl >= 0 ? "green" : "red");
   set("m-port-sub", "Started $1000");
   set("m-pnl", (pnl>=0?"+":"") + "$" + pnl.toFixed(2), pnl>=0?"green":"red");
-  set("m-pnl-sub", s.total_trades + " total trades");
+  set("m-pnl-sub", (s.total_trades||0) + " total trades");
   set("m-wr", (s.win_rate||0) + "%", (s.win_rate||0)>=60?"green":"amber");
   set("m-wr-sub", (s.wins||0) + "W " + (s.losses||0) + "L");
   set("m-open", (s.open_count||0) + "/3");
   set("m-total", s.total_trades||0);
 
   const dl = s.daily_loss || 0;
-  set("m-loss", "$" + dl.toFixed(2), dl > 20 ? "red" : dl > 10 ? "amber" : "amber");
+  set("m-loss", "$" + dl.toFixed(2), dl > 20 ? "red" : "amber");
 
-  // News mood
-  const mood = (n.market_mood||{}).mood || "neutral";
+  const mood  = (n.market_mood||{}).mood || "neutral";
   const boost = n.score_boost || 0;
   set("m-news", mood.toUpperCase(), mood==="bullish"?"green":mood==="bearish"||mood==="critical"?"red":"amber");
   set("m-news-sub", "boost: " + (boost>=0?"+":"") + boost);
 
-  // Protection
+  if(s.mode) document.getElementById("mode-badge").textContent = s.mode + " MODE";
+
   const pct = Math.min(100,(dl/30)*100);
   document.getElementById("p-loss").textContent = "$"+dl.toFixed(2)+" / $30";
   const df = document.getElementById("daily-fill");
@@ -229,22 +212,12 @@ function updateAll(data){
     document.getElementById("p-box").textContent="All shields active";
   }
 
-  // Active trades
   renderTrades(data.open_trades||[]);
-
-  // Logs
   renderLogs(data.logs||[]);
-
-  // News
   renderNews(n);
-
-  // History
   renderHistory(data.history||[]);
-
-  // Weights
   if(data.weights && Object.keys(data.weights).length) renderWeights(data.weights);
 
-  // BTC Live Price
   const btc = data.btc || {};
   if(btc.price && btc.price > 0){
     const chg = btc.change_24h || 0;
@@ -257,9 +230,7 @@ function set(id, val, colorClass){
   const el = document.getElementById(id);
   if(!el) return;
   el.textContent = val;
-  if(colorClass){
-    el.className = colorClass;
-  }
+  if(colorClass) el.className = colorClass;
 }
 
 function renderTrades(trades){
@@ -275,7 +246,7 @@ function renderTrades(trades){
     const pnl     = entry > 0 ? (current - entry) * qty : (t.pnl || 0);
     const pct     = entry > 0 ? ((current - entry) / entry * 100) : (t.pnl_pct || 0);
     const prog    = Math.min(100, Math.max(0, (pct / 10) * 100));
-    const sl_pct  = entry > 0 ? ((t.stop_loss - entry) / entry * 100) : -2;
+    const sl_pct  = entry > 0 && t.stop_loss ? ((t.stop_loss - entry) / entry * 100) : -2;
     const gem     = t.is_gem ? ' 💎' : '';
     const color   = pnl >= 0 ? 'var(--green)' : 'var(--red)';
     return `<div class="trade-card">
@@ -287,27 +258,8 @@ function renderTrades(trades){
       <div class="tc-labels">
         <span>Entry $${entry.toFixed(6)}</span>
         <span>SL ${sl_pct.toFixed(1)}%</span>
-        <span>Score ${t.score}</span>
+        <span>Score ${t.score||'--'}</span>
       </div>
-    </div>`;
-  }).join("");
-}
-  const el = document.getElementById("active-trades");
-  if(!trades.length){
-    el.innerHTML = '<div class="empty">No open trades<br>Scanning for 85+ score...</div>';
-    return;
-  }
-  el.innerHTML = trades.map(t=>{
-    const pnl = t.pnl||0;
-    const pct = t.pnl_pct||0;
-    const prog = Math.min(100,Math.max(0,(pct/10)*100));
-    return `<div class="trade-card">
-      <div class="tc-top">
-        <span style="font-weight:600;">${t.symbol}</span>
-        <span style="font-weight:700;color:${pnl>=0?'var(--green)':'var(--red)'};">${pnl>=0?'+':''}$${pnl.toFixed(3)}</span>
-      </div>
-      <div class="tc-bar"><div class="tc-fill" style="width:${prog}%"></div></div>
-      <div class="tc-labels"><span>Entry $${(t.entry_price||0).toFixed(6)}</span><span>Score ${t.score}</span></div>
     </div>`;
   }).join("");
 }
@@ -348,25 +300,22 @@ function renderNews(n){
     const art = a.article||{};
     const s   = a.sentiment||"neutral";
     const cls = s==="bullish"?"nb-bull":s==="bearish"?"nb-bear":s==="critical"?"nb-crit":"nb-neu";
-
-    // Format date/time
     let timeStr = "";
     const rawTime = art.time || art.fetched || a.analyzed_at || "";
     if(rawTime){
-      try {
+      try{
         const d = new Date(rawTime);
         if(!isNaN(d)){
-          timeStr = d.toLocaleDateString("en-GB", {day:"2-digit",month:"short"}) +
-                    " " + d.toLocaleTimeString("en-GB", {hour:"2-digit",minute:"2-digit"});
+          timeStr = d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"}) + " " +
+                    d.toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"});
         }
-      } catch(e){ timeStr = rawTime.slice(0,16); }
+      }catch(e){ timeStr = rawTime.slice(0,16); }
     }
-
     return `<div class="news-item">
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
         <span class="nb ${cls}">${s.toUpperCase()}</span>
         <span style="font-size:10px;color:var(--muted);">${art.source||""}</span>
-        ${timeStr ? `<span style="font-size:10px;color:var(--muted);margin-left:auto;">&#128336; ${timeStr}</span>` : ""}
+        ${timeStr?`<span style="font-size:10px;color:var(--muted);margin-left:auto;">&#128336; ${timeStr}</span>`:""}
       </div>
       <div style="color:var(--text);font-size:12px;line-height:1.4;">${(art.title||"").slice(0,90)}</div>
       <div style="font-size:10px;color:var(--muted);margin-top:2px;">
