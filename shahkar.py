@@ -6,6 +6,11 @@ Pullback entry, gem crash exemption, hard time block.
 import asyncio, sys, os
 from datetime import datetime
 
+# ── DEBUG — remove after Redis fix ───────────────────────────
+_redis_debug = os.getenv("REDIS_URL", "NOT_SET_AT_ALL")
+print(f"DEBUG REDIS_URL = '{_redis_debug}'")
+# ─────────────────────────────────────────────────────────────
+
 sys.path.insert(0, os.path.dirname(__file__))
 
 if sys.platform == "win32":
@@ -52,7 +57,6 @@ async def push_state(btc, guard, tm, memory, news_engine, risk, inst):
             "halted":        guard.is_halted(),
             "news_mood":     news_engine.market_mood.get("mood", "neutral"),
             "mode":          config.MODE.upper(),
-            "max_trades":    config.MAX_OPEN_TRADES,
             "drawdown":      risk.get_drawdown(),
             "inst_signal":   inst.data.get("signal", "neutral"),
             "fear_greed":    inst.data.get("fear_greed", {}).get("value", 50),
@@ -151,7 +155,7 @@ async def main():
             log.info(
                 f"BTC ${btc['price']:,.0f} ({btc['change_24h']:+.1f}%)  "
                 f"trend={btc['trend']}  "
-                f"Trades:{tm.open_count()}/{config.MAX_OPEN_TRADES}  "
+                f"Trades:{tm.open_count()}/3  "
                 f"Loss:${guard.daily_loss_used():.2f}  "
                 f"DD:{risk.get_drawdown():.1f}%"
             )
@@ -196,6 +200,10 @@ async def main():
             for coin in sorted_candidates:
                 sym = coin["symbol"]
                 if tm.is_open(sym) or tm.is_pending(sym):
+                    continue
+
+                # Check blacklist
+                if tm.is_blacklisted(sym):
                     continue
 
                 blocked, block_reason = news_engine.should_block_entry(sym)
@@ -254,8 +262,7 @@ async def main():
                 is_gem = r["is_gem"]
                 coin   = r["coin"]
 
-                # ✅ FIX: gems ko is_gem pass karo — immediate entry
-                needs_pullback, pullback_price = scorer.needs_pullback_entry(coin, is_gem=is_gem)
+                needs_pullback, pullback_price = scorer.needs_pullback_entry(coin)
 
                 capital = risk.calculate_position_size(
                     base_capital     = config.CAPITAL_PER_TRADE,
