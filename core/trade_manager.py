@@ -187,7 +187,7 @@ class TradeManager:
                     continue
 
                 ticker_data   = ticker_map[symbol]
-                current_price = float(ticker_data["price"])
+                current_price = float(ticker_data.get("lastPrice") or ticker_data.get("price", 0))
                 volume_24h    = float(ticker_data.get("quoteVolume", 0))
 
                 # DEAD COIN KILL SWITCH
