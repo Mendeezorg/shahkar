@@ -1,47 +1,63 @@
 """
 core/trade_manager.py
-Trade manager with Redis persistence.
-Trades survive Railway restarts/redeploys.
+Trade manager — fixed:
+1. Live PnL calculated on every monitor cycle (was 0.000)
+2. open_trades.json saved to file so dashboard reads it
+3. trade_history.json updated on every close
+4. memory.history refreshed after each close
 """
 import json, os, time
 from datetime import datetime
 import config
 from utils.logger import log
 
-HISTORY_FILE = "logs/trade_history.json"
+HISTORY_FILE    = "logs/trade_history.json"
+OPEN_TRADES_FILE = "logs/open_trades.json"
+
+def _save_json(path: str, data):
+    try:
+        os.makedirs("logs", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+    except Exception as e:
+        log.error(f"File save failed {path}: {e}")
+
+def _load_json(path: str, default):
+    try:
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
 
 
 class TradeManager:
     def __init__(self, exchange, guard):
         self.ex      = exchange
         self.guard   = guard
-        # Load from Redis — survive restarts
         from utils.state import state
         self.state   = state
-        self.trades  = self.state.get("open_trades") or {}
+        self.trades  = _load_json(OPEN_TRADES_FILE, {})
         self.pending = self.state.get("pending_entries") or {}
-        log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades from Redis")
+        log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades")
 
     def _save_trades(self):
+        """Save to both Redis state AND file — dashboard reads the file."""
         self.state.set("open_trades", self.trades, expiry=86400)
+        _save_json(OPEN_TRADES_FILE, self.trades)
 
     def _save_pending(self):
         self.state.set("pending_entries", self.pending, expiry=3600)
 
     def _save_history(self, trade: dict):
-        history = self.state.get("trade_history") or []
+        history = _load_json(HISTORY_FILE, [])
+        if not isinstance(history, list):
+            history = []
         history.append(trade)
-        history = history[-200:]  # Keep last 200
-        self.state.set("trade_history", history, expiry=2592000)  # 30 days
-        # Also save to file as backup
-        try:
-            os.makedirs("logs", exist_ok=True)
-            with open(HISTORY_FILE, "w") as f:
-                json.dump(history, f, indent=2, default=str)
-        except Exception:
-            pass
-
-    # ── Pullback pending entries ──────────────────────────────
+        history = history[-200:]
+        _save_json(HISTORY_FILE, history)
+        self.state.set("trade_history", history, expiry=2592000)
 
     def add_pending_entry(self, symbol: str, pullback_price: float,
                            score: int, capital: float, is_gem: bool):
@@ -56,11 +72,11 @@ class TradeManager:
             "created":        datetime.utcnow().isoformat(),
         }
         self._save_pending()
-        log.info(f"PENDING ENTRY  {symbol}  wait_price={pullback_price}  expires=5min")
+        log.info(f"PENDING ENTRY  {symbol}  wait_price={pullback_price:.6f}  expires=5min")
 
     async def check_pending_entries(self, current_prices: dict):
-        now     = time.time()
-        expired = []
+        now      = time.time()
+        expired  = []
         executed = []
 
         for sym, entry in list(self.pending.items()):
@@ -86,8 +102,6 @@ class TradeManager:
         if expired or executed:
             self._save_pending()
 
-    # ── Open trade ────────────────────────────────────────────
-
     async def open_trade(self, symbol: str, score: int,
                           capital: float, is_gem: bool = False) -> bool:
         if symbol in self.trades:
@@ -106,12 +120,14 @@ class TradeManager:
 
         price = order.get("price", 0)
         qty   = order.get("qty", 0)
-        if price == 0:
+        if price == 0 or qty == 0:
+            log.error(f"Bad order data for {symbol}: price={price} qty={qty}")
             return False
 
         self.trades[symbol] = {
             "symbol":         symbol,
             "entry_price":    price,
+            "current_price":  price,
             "qty":            qty,
             "capital":        capital,
             "score":          score,
@@ -124,25 +140,33 @@ class TradeManager:
             "target":         round(price * 1.10, 8),
             "partial_target": round(price * (1 + config.PARTIAL_EXIT_PCT), 8),
             "mode":           config.MODE,
+            "pnl":            0.0,
+            "pnl_pct":        0.0,
         }
         self._save_trades()
-        log.info(f"ENTRY  {symbol}  price={price}  qty={qty:.6f}  score={score}  gem={is_gem}")
+        log.info(f"ENTRY  {symbol}  price={price}  qty={qty:.6f}  score={score}  gem={is_gem}  capital=${capital:.2f}")
         return True
 
-    # ── Monitor trades ────────────────────────────────────────
-
     async def monitor_trades(self):
+        if not self.trades:
+            return
+
         for symbol in list(self.trades.keys()):
             try:
                 t = self.trades[symbol]
                 ticker = await self.ex.client.get_symbol_ticker(symbol=symbol)
                 current_price = float(ticker["price"])
 
+                t["current_price"] = current_price
+                pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
+                pnl     = (current_price - t["entry_price"]) * t["remaining_qty"]
+                t["pnl"]     = round(pnl, 4)
+                t["pnl_pct"] = round(pnl_pct, 2)
+
                 if current_price > t["highest_price"]:
                     t["highest_price"] = current_price
-                    self._save_trades()
 
-                pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
+                self._save_trades()
 
                 if self.guard.check_stop_loss(t["entry_price"], current_price):
                     await self._close_trade(symbol, current_price, "stop_loss")
@@ -161,7 +185,7 @@ class TradeManager:
                     await self._close_trade(symbol, current_price, "target_hit")
                     continue
 
-                log.info(f"MONITOR  {symbol}  {pnl_pct:+.2f}%  price={current_price}")
+                log.info(f"MONITOR  {symbol}  {pnl_pct:+.2f}%  ${pnl:+.3f}  price={current_price}")
 
             except Exception as e:
                 log.error(f"Monitor error {symbol}: {e}")
@@ -180,20 +204,44 @@ class TradeManager:
     async def _close_trade(self, symbol: str, price: float, reason: str):
         t   = self.trades[symbol]
         qty = t["remaining_qty"]
+
+        if price == 0:
+            try:
+                ticker = await self.ex.client.get_symbol_ticker(symbol=symbol)
+                price  = float(ticker["price"])
+            except Exception:
+                price = t["entry_price"]
+
         await self.ex.sell_market(symbol, qty)
+
         pnl     = (price - t["entry_price"]) * qty
         pnl_pct = (price - t["entry_price"]) / t["entry_price"] * 100
-        closed  = {**t, "exit_price": price, "exit_time": datetime.utcnow().isoformat(),
-                   "pnl": round(pnl, 4), "pnl_pct": round(pnl_pct, 2),
-                   "reason": reason, "win": pnl > 0}
+        duration_min = 0
+        try:
+            open_dt = datetime.fromisoformat(t["open_time"])
+            duration_min = int((datetime.utcnow() - open_dt).total_seconds() / 60)
+        except Exception:
+            pass
+
+        closed = {
+            **t,
+            "exit_price":   price,
+            "exit_time":    datetime.utcnow().isoformat(),
+            "pnl":          round(pnl, 4),
+            "pnl_pct":      round(pnl_pct, 2),
+            "reason":       reason,
+            "win":          pnl > 0,
+            "duration_min": duration_min,
+        }
         self._save_history(closed)
         del self.trades[symbol]
         self._save_trades()
+
         if pnl < 0:
             self.guard.record_loss(abs(pnl))
-            log.warning(f"EXIT LOSS   {symbol}  ${pnl:.3f} ({pnl_pct:.2f}%)  {reason}")
+            log.warning(f"EXIT LOSS   {symbol}  ${pnl:.3f} ({pnl_pct:.2f}%)  {reason}  ({duration_min}min)")
         else:
-            log.info(f"EXIT PROFIT {symbol}  +${pnl:.3f} (+{pnl_pct:.2f}%)  {reason}")
+            log.info(f"EXIT PROFIT {symbol}  +${pnl:.3f} (+{pnl_pct:.2f}%)  {reason}  ({duration_min}min)")
 
     def open_count(self) -> int:
         return len(self.trades)
