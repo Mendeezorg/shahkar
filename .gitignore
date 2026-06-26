@@ -31,3 +31,6 @@ trade_memory.json
 
 # Jupyter
 .ipynb_checkpoints/
+
+logs/
+shahkar_state.json
