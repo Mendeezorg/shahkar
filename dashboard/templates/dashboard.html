@@ -265,6 +265,35 @@ function set(id, val, colorClass){
 function renderTrades(trades){
   const el = document.getElementById("active-trades");
   if(!trades.length){
+    el.innerHTML = '<div class="empty">No open trades<br>Scanning for gems...</div>';
+    return;
+  }
+  el.innerHTML = trades.map(t=>{
+    const entry   = t.entry_price || 0;
+    const current = t.current_price || entry;
+    const qty     = t.remaining_qty || t.qty || 0;
+    const pnl     = entry > 0 ? (current - entry) * qty : (t.pnl || 0);
+    const pct     = entry > 0 ? ((current - entry) / entry * 100) : (t.pnl_pct || 0);
+    const prog    = Math.min(100, Math.max(0, (pct / 10) * 100));
+    const sl_pct  = entry > 0 ? ((t.stop_loss - entry) / entry * 100) : -2;
+    const gem     = t.is_gem ? ' 💎' : '';
+    const color   = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    return `<div class="trade-card">
+      <div class="tc-top">
+        <span style="font-weight:600;">${t.symbol}${gem}</span>
+        <span style="font-weight:700;color:${color};">${pnl>=0?'+':''}$${pnl.toFixed(3)} (${pct>=0?'+':''}${pct.toFixed(2)}%)</span>
+      </div>
+      <div class="tc-bar"><div class="tc-fill" style="width:${prog}%"></div></div>
+      <div class="tc-labels">
+        <span>Entry $${entry.toFixed(6)}</span>
+        <span>SL ${sl_pct.toFixed(1)}%</span>
+        <span>Score ${t.score}</span>
+      </div>
+    </div>`;
+  }).join("");
+}
+  const el = document.getElementById("active-trades");
+  if(!trades.length){
     el.innerHTML = '<div class="empty">No open trades<br>Scanning for 85+ score...</div>';
     return;
   }
