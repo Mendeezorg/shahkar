@@ -182,7 +182,7 @@ function updateAll(data){
   set("m-pnl-sub", (s.total_trades||0) + " total trades");
   set("m-wr", (s.win_rate||0) + "%", (s.win_rate||0)>=60?"green":"amber");
   set("m-wr-sub", (s.wins||0) + "W " + (s.losses||0) + "L");
-  set("m-open", (s.open_count||0) + "/3");
+  set("m-open", (s.open_count||0) + "/" + (s.max_trades||7));
   set("m-total", s.total_trades||0);
 
   const dl = s.daily_loss || 0;
