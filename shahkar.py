@@ -117,6 +117,11 @@ async def main():
 
             if not guard.is_trading_allowed():
                 log.info(f"HARD BLOCK  {hour} UTC — sleeping 5 min")
+                try:
+                    btc_quick = await btc_ai.get_btc_data()
+                    await push_state(btc_quick, guard, tm, memory, news_engine, risk, inst)
+                except Exception:
+                    pass
                 await asyncio.sleep(300)
                 continue
 
