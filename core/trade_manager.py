@@ -1,10 +1,9 @@
 """
 core/trade_manager.py
 Trade manager — fixed:
-1. Live PnL calculated on every monitor cycle (was 0.000)
-2. open_trades.json saved to file so dashboard reads it
-3. trade_history.json updated on every close
-4. memory.history refreshed after each close
+1. Live PnL calculated on every monitor cycle
+2. Saves to both Redis (open_trades + trades keys) and file
+3. trade_history saved on every close
 """
 import json, os, time
 from datetime import datetime
@@ -14,6 +13,7 @@ from utils.logger import log
 HISTORY_FILE     = "logs/trade_history.json"
 OPEN_TRADES_FILE = "logs/open_trades.json"
 
+
 def _save_json(path: str, data):
     try:
         os.makedirs("logs", exist_ok=True)
@@ -21,6 +21,7 @@ def _save_json(path: str, data):
             json.dump(data, f, indent=2, default=str)
     except Exception as e:
         log.error(f"File save failed {path}: {e}")
+
 
 def _load_json(path: str, default):
     try:
@@ -43,8 +44,9 @@ class TradeManager:
         log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades")
 
     def _save_trades(self):
-        """Save to both Redis state AND file — dashboard reads the file."""
+        """Save to Redis (both keys) AND file."""
         self.state.set("open_trades", self.trades, expiry=86400)
+        self.state.set("trades", self.trades, expiry=86400)
         _save_json(OPEN_TRADES_FILE, self.trades)
 
     def _save_pending(self):
@@ -157,7 +159,7 @@ class TradeManager:
                 ticker = await self.ex.client.get_symbol_ticker(symbol=symbol)
                 current_price = float(ticker["price"])
 
-                # ✅ FIX: Update live price AND pnl every cycle
+                # Update live price AND pnl every cycle
                 t["current_price"] = current_price
                 pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
                 pnl     = (current_price - t["entry_price"]) * t["remaining_qty"]
@@ -215,8 +217,8 @@ class TradeManager:
 
         await self.ex.sell_market(symbol, qty)
 
-        pnl     = (price - t["entry_price"]) * qty
-        pnl_pct = (price - t["entry_price"]) / t["entry_price"] * 100
+        pnl      = (price - t["entry_price"]) * qty
+        pnl_pct  = (price - t["entry_price"]) / t["entry_price"] * 100
         duration_min = 0
         try:
             open_dt = datetime.fromisoformat(t["open_time"])
