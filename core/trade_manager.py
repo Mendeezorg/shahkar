@@ -11,7 +11,7 @@ from datetime import datetime
 import config
 from utils.logger import log
 
-HISTORY_FILE    = "logs/trade_history.json"
+HISTORY_FILE     = "logs/trade_history.json"
 OPEN_TRADES_FILE = "logs/open_trades.json"
 
 def _save_json(path: str, data):
@@ -157,6 +157,7 @@ class TradeManager:
                 ticker = await self.ex.client.get_symbol_ticker(symbol=symbol)
                 current_price = float(ticker["price"])
 
+                # ✅ FIX: Update live price AND pnl every cycle
                 t["current_price"] = current_price
                 pnl_pct = (current_price - t["entry_price"]) / t["entry_price"] * 100
                 pnl     = (current_price - t["entry_price"]) * t["remaining_qty"]
