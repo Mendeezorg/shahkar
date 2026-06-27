@@ -29,7 +29,8 @@ GEM_EXEMPT_FROM_CRASH = True    # Gems survive BTC crash
 ML_PATTERN_ENABLED    = False   # Use simple pattern instead
 
 # ── Volume ───────────────────────────────────────────────────
-MIN_VOLUME_USDT   = 50_000    # Very low — catch rank #222 gems
+MIN_VOLUME_USDT   = 250_000   # Raised from 50k — avoid "technically listed, practically dead" coins
+MIN_TRADE_COUNT_24H = 500      # Minimum 24h trade count — filters coins with high volume but near-zero real activity
 MIN_VOLUME_SPIKE  = 2.0       # 2x average volume
 
 # ── Scanning ─────────────────────────────────────────────────
