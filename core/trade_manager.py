@@ -35,9 +35,23 @@ class TradeManager:
         self.ex      = exchange
         self.guard   = guard
         from utils.state import state
+        import os
         self.state   = state
-        self.trades  = self.state.get("open_trades") or _load_json(OPEN_TRADES_FILE, {})
-        self.pending = self.state.get("pending_entries") or {}
+
+        if os.getenv("RESET_TRADES", "").lower() == "true":
+            log.warning("RESET_TRADES=true — clearing all open trades & history on startup")
+            self.trades  = {}
+            self.pending = {}
+            self.state.set("open_trades", {})
+            self.state.set("trades", {})
+            self.state.set("pending_entries", {})
+            self.state.set("history", [])
+            self.state.set("trade_history", [])
+            _save_json(OPEN_TRADES_FILE, {})
+        else:
+            self.trades  = self.state.get("open_trades") or _load_json(OPEN_TRADES_FILE, {})
+            self.pending = self.state.get("pending_entries") or {}
+
         log.info(f"TRADE MANAGER  loaded {len(self.trades)} open trades")
 
     def _save_trades(self):
