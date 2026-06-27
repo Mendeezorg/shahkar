@@ -22,7 +22,7 @@ class Scanner:
     async def get_tradeable_pairs(self) -> list[str]:
         """
         One API call to get all USDT pairs.
-        Filter: active, no leverage tokens, min 50k volume.
+        Filter: active, no leverage tokens, min volume, min recent trade activity.
         """
         try:
             tickers = await self.client.get_ticker()
@@ -36,9 +36,15 @@ class Scanner:
                     continue
                 try:
                     vol = float(t.get("quoteVolume", 0))
+                    trade_count = int(t.get("count", 0))
                 except (ValueError, TypeError):
                     continue
                 if vol < config.MIN_VOLUME_USDT:
+                    continue
+                # Recent-activity check: high 24h volume but very few trades
+                # usually means a handful of large orders, not genuine ongoing
+                # trading — the coin can sit flat for long stretches.
+                if trade_count < config.MIN_TRADE_COUNT_24H:
                     continue
                 pairs.append(sym)
             self.pairs = pairs
