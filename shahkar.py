@@ -213,11 +213,12 @@ async def main():
 
                 is_gem = sym in gem_set
 
+                whale_data = whale_chain.get_ultimate_whale_signal(sym)
                 result = scorer.score(
                     symbol       = sym,
                     candidate    = coin,
                     btc_trend    = btc["trend"],
-                    whale_signal = "neutral",
+                    whale_signal = whale_data.get("signal", "neutral"),
                     is_gem       = is_gem,
                     hour_utc     = hour,
                     ob_bonus     = 0.0,
