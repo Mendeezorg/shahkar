@@ -249,14 +249,20 @@ function renderTrades(trades){
     const sl_pct  = entry > 0 && t.stop_loss ? ((t.stop_loss - entry) / entry * 100) : -2;
     const gem     = t.is_gem ? ' 💎' : '';
     const color   = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const absPnl  = Math.abs(pnl);
+    const pnlDec   = absPnl === 0 ? 2 : absPnl < 0.01 ? 6 : absPnl < 1 ? 4 : 2;
+    const absPct   = Math.abs(pct);
+    const pctDec   = absPct === 0 ? 2 : absPct < 0.01 ? 4 : 2;
+    const flat     = pnl === 0 && pct === 0;
     return `<div class="trade-card">
       <div class="tc-top">
         <span style="font-weight:600;">${t.symbol}${gem}</span>
-        <span style="font-weight:700;color:${color};">${pnl>=0?'+':''}$${pnl.toFixed(3)} (${pct>=0?'+':''}${pct.toFixed(2)}%)</span>
+        <span style="font-weight:700;color:${flat?'var(--muted,#888)':color};">${pnl>=0?'+':''}$${pnl.toFixed(pnlDec)} (${pct>=0?'+':''}${pct.toFixed(pctDec)}%)${flat?' <span style="font-size:9px;font-weight:400;">flat</span>':''}</span>
       </div>
       <div class="tc-bar"><div class="tc-fill" style="width:${prog}%"></div></div>
       <div class="tc-labels">
         <span>Entry $${entry.toFixed(6)}</span>
+        <span>Now $${current.toFixed(6)}</span>
         <span>SL ${sl_pct.toFixed(1)}%</span>
         <span>Score ${t.score||'--'}</span>
       </div>
@@ -332,16 +338,24 @@ function renderHistory(history){
     tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:16px;">No trades yet</td></tr>';
     return;
   }
-  tb.innerHTML = history.map(t=>`<tr>
+  tb.innerHTML = history.map(t=>{
+    const pnl    = t.pnl||0;
+    const pct    = t.pnl_pct||0;
+    const absPnl = Math.abs(pnl);
+    const pnlDec  = absPnl === 0 ? 2 : absPnl < 0.01 ? 6 : absPnl < 1 ? 4 : 2;
+    const absPct  = Math.abs(pct);
+    const pctDec  = absPct === 0 ? 2 : absPct < 0.01 ? 4 : 2;
+    return `<tr>
     <td style="font-weight:600;">${t.symbol}</td>
     <td>${t.score||"--"}</td>
     <td style="font-size:10px;">${(t.entry_price||0).toFixed(6)}</td>
     <td style="font-size:10px;">${(t.exit_price||0).toFixed(6)}</td>
-    <td style="color:${t.win?'var(--green)':'var(--red)'};">${t.win?'+':''}$${(t.pnl||0).toFixed(3)}</td>
-    <td style="color:${t.win?'var(--green)':'var(--red)'};">${t.win?'+':''}${(t.pnl_pct||0).toFixed(2)}%</td>
+    <td style="color:${t.win?'var(--green)':'var(--red)'};">${t.win?'+':''}$${pnl.toFixed(pnlDec)}</td>
+    <td style="color:${t.win?'var(--green)':'var(--red)'};">${t.win?'+':''}${pct.toFixed(pctDec)}%</td>
     <td style="font-size:10px;color:var(--muted);">${t.reason||"--"}</td>
     <td><span class="wb ${t.win?'wb-w':'wb-l'}">${t.win?'WIN':'LOSS'}</span></td>
-  </tr>`).join("");
+  </tr>`;
+  }).join("");
 }
 
 function renderWeights(w){
