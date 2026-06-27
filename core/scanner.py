@@ -168,9 +168,8 @@ class Scanner:
             best_bid = float(bids[0][0])
             best_ask = float(asks[0][0])
             spread   = (best_ask - best_bid) / best_bid * 100
-            if spread > 0.5:
-                return {"signal": "skip", "reason": f"spread {spread:.2f}%", "score_bonus": -10}
-
+            if spread > 2.5:
+                return {"signal": "skip", "reason": f"spread {spread:.2f}%", "score_bonus": 0}
             signal = "bullish" if buy_pct >= 60 else "bearish" if buy_pct <= 40 else "neutral"
             bonus  = round(imbalance * 10, 1)   # Max ±10
 
