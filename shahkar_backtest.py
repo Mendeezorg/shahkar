@@ -330,6 +330,87 @@ def get_btc_trend_series(btc_df):
 
 
 # ──────────────────────────────────────────────────────────────────
+# NEW STRATEGY TRIGGERS (Round 2 — replacing dead multi-indicator scoring)
+# ──────────────────────────────────────────────────────────────────
+LARGE_CAP_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"}
+
+
+def check_pullback_entry(i, closes, opens, volumes):
+    """
+    Strategy 1: Pullback Entry (long-only continuation)
+    - >5% upward move over the last 12 candles (1h momentum)
+    - current candle (i) is red (the pullback)
+    - current candle's volume < 80% of avg volume of previous 3 candles
+    """
+    if i < 12 or closes[i - 12] <= 0:
+        return False
+    mom = (closes[i] - closes[i - 12]) / closes[i - 12]
+    if mom <= 0.05:
+        return False
+    is_red = closes[i] < opens[i]
+    if not is_red:
+        return False
+    if i < 3:
+        return False
+    avg_prev3_vol = np.mean(volumes[i - 3:i])
+    if avg_prev3_vol <= 0:
+        return False
+    return volumes[i] < 0.8 * avg_prev3_vol
+
+
+def check_squeeze_breakout(i, opens, highs, lows, closes, volumes):
+    """
+    Strategy 2: Volatility Squeeze Breakout (long-only)
+    - ATR(14) at i-1 is the lowest of the last 50 candles (compression)
+    - candle i body > 1.5x avg body of last 20 candles
+    - candle i volume > 3x avg volume of last 20 candles
+    - candle i must be green (bullish breakout direction)
+    """
+    if i < 64:  # need 50 candles of ATR history + 14 for ATR itself
+        return False
+
+    # ATR series for the last 50 candles ending at i-1
+    atrs = []
+    for j in range(i - 50, i):
+        a = atr_14(highs[max(0, j - 14):j + 1], lows[max(0, j - 14):j + 1], closes[max(0, j - 14):j + 1])
+        atrs.append(a if a is not None else np.nan)
+    atrs = np.array(atrs, dtype=float)
+    valid = atrs[~np.isnan(atrs)]
+    if len(valid) < 30:
+        return False
+    atr_at_i_minus_1 = atrs[-1]
+    if np.isnan(atr_at_i_minus_1):
+        return False
+    if atr_at_i_minus_1 > np.nanmin(atrs):
+        return False  # not the lowest -> no compression
+
+    body_i = abs(closes[i] - opens[i])
+    avg_body_20 = np.mean(np.abs(closes[i - 20:i] - opens[i - 20:i]))
+    if avg_body_20 <= 0 or body_i <= 1.5 * avg_body_20:
+        return False
+
+    avg_vol_20 = np.mean(volumes[i - 20:i])
+    if avg_vol_20 <= 0 or volumes[i] <= 3.0 * avg_vol_20:
+        return False
+
+    return closes[i] > opens[i]  # green breakout candle
+
+
+def check_mean_reversion(i, closes, opens):
+    """
+    Strategy 3: Large-Cap Mean Reversion (long-only, large caps only — filtered at call site)
+    - RSI(14) computed on data up to i-1 drops below 25 (extreme oversold)
+    - candle i closes green (reversal confirmation)
+    """
+    if i < 15:
+        return False
+    rsi_prev = calc_rsi(closes[:i])  # up to but not including candle i
+    if rsi_prev >= 25:
+        return False
+    return closes[i] > opens[i]
+
+
+# ──────────────────────────────────────────────────────────────────
 # STEP 4: Backtest loop — no look-ahead bias (Fix #3)
 # ──────────────────────────────────────────────────────────────────
 def calculate_pnl(entry_price, exit_price, cost_bps):
@@ -339,7 +420,7 @@ def calculate_pnl(entry_price, exit_price, cost_bps):
     return (adj_exit - adj_entry) / adj_entry
 
 
-def run_backtest(df, btc_trend_arr, strategy, cost_bps, random_trigger_rate=0.0015):
+def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
     trades = []
     position = None
 
@@ -347,29 +428,30 @@ def run_backtest(df, btc_trend_arr, strategy, cost_bps, random_trigger_rate=0.00
     opens_all = df["open"].values
     highs_all = df["high"].values
     lows_all = df["low"].values
+    volumes_all = df["volume"].values
+
+    # Strategy 3 only runs on large caps — skip entirely for everything else
+    if strategy == "mean_reversion" and symbol not in LARGE_CAP_SYMBOLS:
+        return []
 
     n = len(df)
     for i in range(300, n - 1):  # -1 ensures i+1 (realistic entry candle) exists
         if position is None:
             trigger = False
-            score = None
 
-            if strategy == "bot":
-                window = df.iloc[max(0, i - 99):i + 1]
-                btc_t = btc_trend_arr[i] if i < len(btc_trend_arr) else "sideways"
-                score, _ = offline_score(window, btc_trend=btc_t)
-                trigger = score >= MIN_SCORE
+            if strategy == "pullback":
+                trigger = check_pullback_entry(i, closes_all, opens_all, volumes_all)
 
-            elif strategy == "momentum_only":
-                if i >= 12 and closes_all[i - 12] > 0:
-                    mom = (closes_all[i] - closes_all[i - 12]) / closes_all[i - 12]
-                    trigger = mom > 0.05
+            elif strategy == "squeeze_breakout":
+                trigger = check_squeeze_breakout(i, opens_all, highs_all, lows_all, closes_all, volumes_all)
+
+            elif strategy == "mean_reversion":
+                trigger = check_mean_reversion(i, closes_all, opens_all)
 
             elif strategy == "random":
                 trigger = random.random() < random_trigger_rate
 
             if trigger:
-                window_for_atr = df.iloc[max(0, i - 20):i + 1]
                 atr_pct = atr_14(
                     highs_all[max(0, i - 20):i + 1],
                     lows_all[max(0, i - 20):i + 1],
@@ -385,7 +467,6 @@ def run_backtest(df, btc_trend_arr, strategy, cost_bps, random_trigger_rate=0.00
                     "sl": entry_price * (1 - atr_pct * ATR_SL_MULT),
                     "tp": entry_price * (1 + atr_pct * ATR_TP_MULT),
                     "atr_pct": atr_pct,
-                    "score": score,
                 }
         else:
             row_high = highs_all[i]
@@ -407,7 +488,6 @@ def run_backtest(df, btc_trend_arr, strategy, cost_bps, random_trigger_rate=0.00
                     "pnl_pct": pnl_pct,
                     "exit_reason": exit_reason,
                     "atr_pct": position["atr_pct"],
-                    "score": position["score"],
                 })
                 position = None
 
@@ -433,18 +513,13 @@ def win_rate(trades):
 # ──────────────────────────────────────────────────────────────────
 def main():
     print("=" * 70)
-    print("SHAHKAR THREE-BASELINE BACKTEST (rigorous edition)")
+    print("SHAHKAR ROUND 2 BACKTEST — New Structural Strategies")
+    print("=" * 70)
+    print("Old multi-indicator scoring is retired (PF 0.206, tied with random).")
+    print("Testing: Pullback Entry | Squeeze Breakout | Mean Reversion | Random")
     print("=" * 70)
 
     symbols = get_candidate_pairs(top_n=60)
-
-    print(f"\nDownloading {DAYS_BACK} days of 5m klines for BTCUSDT (trend reference)...")
-    btc_df = download_klines_safe("BTCUSDT", days=DAYS_BACK)
-    if btc_df is None:
-        print("FATAL: could not download BTC data.")
-        return
-    btc_trend_arr = get_btc_trend_series(btc_df)
-    print(f"BTC data: {len(btc_df)} candles.")
 
     print(f"\nDownloading + filtering {len(symbols)} pairs (survivorship filter: max single-candle move < {MAX_SINGLE_CANDLE_MOVE:.0%})...")
     clean_data = {}
@@ -463,20 +538,21 @@ def main():
         print("FATAL: too few pairs survived. Aborting.")
         return
 
-    print("\nRunning backtests across 3 strategies x 3 cost scenarios...")
+    n_large_cap = sum(1 for s in clean_data if s in LARGE_CAP_SYMBOLS)
+    print(f"Large-cap pairs available for Mean Reversion strategy: {n_large_cap}/{len(LARGE_CAP_SYMBOLS)}")
+
+    print("\nRunning backtests across 4 strategies x 3 cost scenarios...")
     final_table = []
 
-    for strategy in ["bot", "momentum_only", "random"]:
+    strategies = ["pullback", "squeeze_breakout", "mean_reversion", "random"]
+
+    for strategy in strategies:
         print(f"\n--- Strategy: {strategy} ---")
 
-        # Run the strategy ONCE per cost scenario (not post-hoc approximation)
-        # so entry/exit fills and PnL are computed correctly for that exact cost level.
         for scenario_name, cost_bps in COST_SCENARIOS.items():
             all_trades = []
             for sym, df in clean_data.items():
-                local_btc_trend = btc_trend_arr if len(btc_trend_arr) >= len(df) else \
-                    np.resize(btc_trend_arr, len(df))
-                trades = run_backtest(df, local_btc_trend, strategy, cost_bps=cost_bps)
+                trades = run_backtest(df, strategy, cost_bps=cost_bps, symbol=sym)
                 for t in trades:
                     t["symbol"] = sym
                 all_trades.extend(trades)
@@ -495,24 +571,25 @@ def main():
             print(f"  {scenario_name}: {n_trades} trades, win_rate={wr*100:.1f}%, PF={pf if pf==float('inf') else round(pf,3)}")
 
     print("\n" + "=" * 70)
-    print("RESULTS — 3 strategies x 3 cost scenarios")
+    print("RESULTS — 4 strategies x 3 cost scenarios")
     print("=" * 70)
 
     df_results = pd.DataFrame(final_table)
     print(df_results.to_string(index=False))
 
-    out_path = "/tmp/backtest_results.json"
+    # FIX: save in local working directory, not /tmp (Windows-incompatible)
+    out_path = "backtest_results.json"
     with open(out_path, "w") as f:
         json.dump(final_table, f, indent=2)
     print(f"\nSaved results to {out_path}")
 
     print("\n" + "=" * 70)
     print("VERDICT GUIDE:")
-    print("  Bot Best_Case PF < 1.0   -> STOP. No edge even under best-case costs.")
-    print("  Bot Base_Case PF > 1.10 and Stress_Case PF > 1.00 -> genuine robust edge.")
-    print("  Bot Base_Case PF > 1.10 but Stress_Case PF < 1.00 -> edge exists but fragile.")
-    print("  Bot doesn't beat Random  -> scoring system has no edge over chance.")
-    print("  Bot doesn't beat Momentum-only -> the 6 extra indicators add no value.")
+    print("  Any strategy's Best_Case PF < 1.0  -> dead on arrival, no edge even theoretically.")
+    print("  Base_Case PF > 1.10 and Stress_Case PF > 1.00 -> genuine, robust edge. Worth pursuing.")
+    print("  Base_Case PF > 1.10 but Stress_Case PF < 1.00 -> edge exists but fragile execution-dependent.")
+    print("  Strategy doesn't beat Random -> no real edge, structurally indistinguishable from chance.")
+    print("  Low n_trades (<30) on any strategy -> not enough data to trust the PF number yet.")
     print("=" * 70)
 
 
