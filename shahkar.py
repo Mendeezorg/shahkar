@@ -70,11 +70,11 @@ async def push_state(btc, guard, tm, memory, news_engine, risk, inst):
             "score_boost": nd.get("score_boost", 0),
         })
         state.update_weights(config.INDICATOR_WEIGHTS)
-        state.set("shahkar_protection", {
+        state.set("protection", {
             "daily_loss": guard.daily_loss_used(),
             "halted":     guard.is_halted(),
         })
-        state.set("shahkar_history", {"trades": memory.history[-20:][::-1]})
+        state.set("history", memory.history[-20:][::-1])
         try:
             from utils.logger import get_log_buffer
             state.update_logs(get_log_buffer()[-40:])
