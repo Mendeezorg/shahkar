@@ -358,30 +358,63 @@ def check_pullback_entry(i, closes, opens, volumes):
     return volumes[i] < 0.8 * avg_prev3_vol
 
 
-def check_squeeze_breakout(i, opens, highs, lows, closes, volumes):
+def compute_full_atr_series(highs, lows, closes, period=14):
+    """
+    Vectorized ATR(14) computed ONCE for an entire symbol's data,
+    instead of recomputing a 14-candle window from scratch for every
+    candle (which made check_squeeze_breakout O(n * 50 * 14) and took
+    over an hour per symbol). This is O(n) total.
+    Returns an array the same length as closes, with np.nan for the
+    first `period` entries where ATR isn't yet defined.
+    """
+    n = len(closes)
+    atr_pct = np.full(n, np.nan)
+    if n < period + 1:
+        return atr_pct
+
+    prev_close = closes[:-1]
+    tr = np.maximum(
+        highs[1:] - lows[1:],
+        np.maximum(
+            np.abs(highs[1:] - prev_close),
+            np.abs(lows[1:] - prev_close),
+        ),
+    )
+    # Simple moving average of true range over `period`, using pandas for a fast rolling window
+    tr_series = pd.Series(tr)
+    atr_abs = tr_series.rolling(window=period).mean().values  # aligned to tr (i.e. index 0 corresponds to candles[1])
+
+    # atr_abs[k] is the ATR ending at candles[k+1]; convert to % of that candle's close
+    closes_aligned = closes[1:]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        atr_pct_aligned = np.where(closes_aligned > 0, atr_abs / closes_aligned, np.nan)
+
+    atr_pct[1:] = atr_pct_aligned
+    return atr_pct
+
+
+def check_squeeze_breakout(i, opens, highs, lows, closes, volumes, atr_series):
     """
     Strategy 2: Volatility Squeeze Breakout (long-only)
     - ATR(14) at i-1 is the lowest of the last 50 candles (compression)
     - candle i body > 1.5x avg body of last 20 candles
     - candle i volume > 3x avg volume of last 20 candles
     - candle i must be green (bullish breakout direction)
+
+    atr_series: precomputed via compute_full_atr_series() ONCE per symbol —
+    this function now does O(1)-ish array slicing instead of recomputing ATR.
     """
     if i < 64:  # need 50 candles of ATR history + 14 for ATR itself
         return False
 
-    # ATR series for the last 50 candles ending at i-1
-    atrs = []
-    for j in range(i - 50, i):
-        a = atr_14(highs[max(0, j - 14):j + 1], lows[max(0, j - 14):j + 1], closes[max(0, j - 14):j + 1])
-        atrs.append(a if a is not None else np.nan)
-    atrs = np.array(atrs, dtype=float)
-    valid = atrs[~np.isnan(atrs)]
+    window = atr_series[i - 50:i]  # ATR values for the 50 candles ending at i-1
+    valid = window[~np.isnan(window)]
     if len(valid) < 30:
         return False
-    atr_at_i_minus_1 = atrs[-1]
+    atr_at_i_minus_1 = atr_series[i - 1]
     if np.isnan(atr_at_i_minus_1):
         return False
-    if atr_at_i_minus_1 > np.nanmin(atrs):
+    if atr_at_i_minus_1 > np.nanmin(window):
         return False  # not the lowest -> no compression
 
     body_i = abs(closes[i] - opens[i])
@@ -434,6 +467,12 @@ def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
     if strategy == "mean_reversion" and symbol not in LARGE_CAP_SYMBOLS:
         return []
 
+    # Precompute the full ATR% series ONCE per symbol (huge speedup vs.
+    # recomputing a 50x14 nested window inside check_squeeze_breakout per candle)
+    atr_series = None
+    if strategy == "squeeze_breakout":
+        atr_series = compute_full_atr_series(highs_all, lows_all, closes_all)
+
     n = len(df)
     for i in range(300, n - 1):  # -1 ensures i+1 (realistic entry candle) exists
         if position is None:
@@ -443,7 +482,7 @@ def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
                 trigger = check_pullback_entry(i, closes_all, opens_all, volumes_all)
 
             elif strategy == "squeeze_breakout":
-                trigger = check_squeeze_breakout(i, opens_all, highs_all, lows_all, closes_all, volumes_all)
+                trigger = check_squeeze_breakout(i, opens_all, highs_all, lows_all, closes_all, volumes_all, atr_series)
 
             elif strategy == "mean_reversion":
                 trigger = check_mean_reversion(i, closes_all, opens_all)
