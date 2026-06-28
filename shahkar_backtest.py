@@ -50,6 +50,7 @@ ATR_SL_MULT            = 1.5
 ATR_TP_MULT            = 4.0
 
 COST_SCENARIOS = {
+    "Theoretical_0bps":  0,   # GLM-requested verification: isolates pure logic edge from execution costs
     "Best_Case_30bps":   30,
     "Base_Case_50bps":   50,
     "Stress_Case_80bps": 80,
@@ -678,15 +679,13 @@ def main():
     n_large_cap = sum(1 for s in clean_data if s in LARGE_CAP_SYMBOLS)
     print(f"Large-cap pairs available for Mean Reversion strategy: {n_large_cap}/{len(LARGE_CAP_SYMBOLS)}")
 
-    print("\nRunning backtests across 4 strategies x 3 cost scenarios...")
+    print("\nRunning backtests across 2 strategies x 4 cost scenarios (incl. theoretical 0bps)...")
     final_table = []
 
     strategy_configs = [
         # (strategy_name, sl_atr_mult_override, debug_mean_reversion)
-        ("pullback",        None, False),  # original: volume < 80%, SL 1.5x ATR
-        ("pullback_strict", 1.2,  False),   # GLM Tweak 1+2: volume < 50%, SL 1.2x ATR
-        ("mean_reversion",  None, True),    # debug=True prints RSI at each trigger to verify the fix
-        ("random",          None, False),
+        ("pullback", None, False),  # GLM Q4 verification: does removing ALL costs reveal a real edge?
+        ("random",   None, False),  # baseline for comparison
     ]
 
     for strategy, sl_override, debug_mr in strategy_configs:
