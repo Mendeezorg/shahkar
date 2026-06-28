@@ -147,17 +147,68 @@ def passes_survivorship_filter(df):
 # ──────────────────────────────────────────────────────────────────
 # Indicator helpers — replicate core/scorer.py exactly
 # ──────────────────────────────────────────────────────────────────
+def compute_full_rsi_series(closes, period=14):
+    """
+    Vectorized Wilder's RSI computed ONCE for the entire series, instead of
+    recomputing the recursive smoothing from scratch for every candle
+    (which made check_mean_reversion take ~4 minutes per symbol after the
+    Wilder's-RSI fix). Returns an array the same length as closes, with
+    np.nan for indices before RSI is defined.
+    """
+    n = len(closes)
+    rsi = np.full(n, np.nan)
+    if n < period + 1:
+        return rsi
+
+    delta = np.diff(closes)
+    gains = np.where(delta > 0, delta, 0.0)
+    losses = np.where(delta < 0, -delta, 0.0)
+
+    avg_gain = np.mean(gains[:period])
+    avg_loss = np.mean(losses[:period])
+    rsi[period] = 100.0 if avg_loss == 0 else 100 - (100 / (1 + avg_gain / avg_loss))
+
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+        idx = i + 1  # gains[i] corresponds to the transition into closes[i+1]
+        if avg_loss == 0:
+            rsi[idx] = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi[idx] = 100 - (100 / (1 + rs))
+    return rsi
+
+
 def calc_rsi(closes, period=14):
+    """
+    Standard Wilder's RSI with proper recursive smoothing, for a single
+    point-in-time calculation (used by the live-bot-replica scorer).
+    NOTE: the original version of this function used a flat simple-average
+    of the last `period` gains/losses, which is far noisier than real RSI —
+    it caused mean_reversion's RSI<25 condition to fire ~3.8x more often
+    than it should (verified: 6.87% of candles vs 1.81% with proper Wilder
+    smoothing on a synthetic random walk), which explains the 2200 trades
+    on just 5 symbols that GLM correctly flagged as implausible.
+
+    For repeated calls across a whole series (e.g. inside a backtest loop),
+    use compute_full_rsi_series() instead — this per-call version recomputes
+    the full recursive smoothing from scratch every time, which is fine for
+    a single offline_score() call but too slow to call per-candle in a loop.
+    """
     if len(closes) < period + 1:
         return 50.0
     delta = np.diff(closes)
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
-    avg_g = np.mean(gain[-period:])
-    avg_l = np.mean(loss[-period:])
-    if avg_l == 0:
+    gains = np.where(delta > 0, delta, 0)
+    losses = np.where(delta < 0, -delta, 0)
+    avg_gain = np.mean(gains[:period])
+    avg_loss = np.mean(losses[:period])
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    if avg_loss == 0:
         return 100.0
-    rs = avg_g / avg_l
+    rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 
 
@@ -335,12 +386,15 @@ def get_btc_trend_series(btc_df):
 LARGE_CAP_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"}
 
 
-def check_pullback_entry(i, closes, opens, volumes):
+def check_pullback_entry(i, closes, opens, volumes, volume_threshold=0.8):
     """
     Strategy 1: Pullback Entry (long-only continuation)
     - >5% upward move over the last 12 candles (1h momentum)
     - current candle (i) is red (the pullback)
-    - current candle's volume < 80% of avg volume of previous 3 candles
+    - current candle's volume < volume_threshold (default 80%) of avg volume of previous 3 candles
+
+    volume_threshold parameter enables "pullback_strict" (GLM Tweak 2: 50% instead of 80%)
+    without duplicating the function.
     """
     if i < 12 or closes[i - 12] <= 0:
         return False
@@ -355,7 +409,7 @@ def check_pullback_entry(i, closes, opens, volumes):
     avg_prev3_vol = np.mean(volumes[i - 3:i])
     if avg_prev3_vol <= 0:
         return False
-    return volumes[i] < 0.8 * avg_prev3_vol
+    return volumes[i] < volume_threshold * avg_prev3_vol
 
 
 def compute_full_atr_series(highs, lows, closes, period=14):
@@ -429,18 +483,25 @@ def check_squeeze_breakout(i, opens, highs, lows, closes, volumes, atr_series):
     return closes[i] > opens[i]  # green breakout candle
 
 
-def check_mean_reversion(i, closes, opens):
+def check_mean_reversion(i, closes, opens, rsi_series, symbol="", debug=False):
     """
     Strategy 3: Large-Cap Mean Reversion (long-only, large caps only — filtered at call site)
     - RSI(14) computed on data up to i-1 drops below 25 (extreme oversold)
     - candle i closes green (reversal confirmation)
+
+    rsi_series: precomputed via compute_full_rsi_series() — rsi_series[i-1] is
+    the RSI value using data up to and including closes[i-1], matching the
+    original intent ("up to candle i-1") without recomputing from scratch.
     """
-    if i < 15:
+    if i < 15 or i - 1 >= len(rsi_series):
         return False
-    rsi_prev = calc_rsi(closes[:i])  # up to but not including candle i
-    if rsi_prev >= 25:
+    rsi_prev = rsi_series[i - 1]
+    if np.isnan(rsi_prev) or rsi_prev >= 25:
         return False
-    return closes[i] > opens[i]
+    triggered = closes[i] > opens[i]
+    if triggered and debug:
+        print(f"    [DEBUG mean_reversion] {symbol} i={i} RSI(i-1)={rsi_prev:.1f}")
+    return triggered
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -453,7 +514,8 @@ def calculate_pnl(entry_price, exit_price, cost_bps):
     return (adj_exit - adj_entry) / adj_entry
 
 
-def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
+def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015,
+                  sl_atr_mult=None, debug_mean_reversion=False):
     trades = []
     position = None
 
@@ -463,15 +525,21 @@ def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
     lows_all = df["low"].values
     volumes_all = df["volume"].values
 
+    sl_mult = sl_atr_mult if sl_atr_mult is not None else ATR_SL_MULT
+
     # Strategy 3 only runs on large caps — skip entirely for everything else
     if strategy == "mean_reversion" and symbol not in LARGE_CAP_SYMBOLS:
         return []
 
-    # Precompute the full ATR% series ONCE per symbol (huge speedup vs.
-    # recomputing a 50x14 nested window inside check_squeeze_breakout per candle)
+    # Precompute series ONCE per symbol (huge speedup vs. recomputing
+    # nested windows inside the trigger check on every candle)
     atr_series = None
     if strategy == "squeeze_breakout":
         atr_series = compute_full_atr_series(highs_all, lows_all, closes_all)
+
+    rsi_series = None
+    if strategy == "mean_reversion":
+        rsi_series = compute_full_rsi_series(closes_all)
 
     n = len(df)
     for i in range(300, n - 1):  # -1 ensures i+1 (realistic entry candle) exists
@@ -479,13 +547,16 @@ def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
             trigger = False
 
             if strategy == "pullback":
-                trigger = check_pullback_entry(i, closes_all, opens_all, volumes_all)
+                trigger = check_pullback_entry(i, closes_all, opens_all, volumes_all, volume_threshold=0.8)
+
+            elif strategy == "pullback_strict":
+                trigger = check_pullback_entry(i, closes_all, opens_all, volumes_all, volume_threshold=0.5)
 
             elif strategy == "squeeze_breakout":
                 trigger = check_squeeze_breakout(i, opens_all, highs_all, lows_all, closes_all, volumes_all, atr_series)
 
             elif strategy == "mean_reversion":
-                trigger = check_mean_reversion(i, closes_all, opens_all)
+                trigger = check_mean_reversion(i, closes_all, opens_all, rsi_series, symbol=symbol, debug=debug_mean_reversion)
 
             elif strategy == "random":
                 trigger = random.random() < random_trigger_rate
@@ -503,7 +574,7 @@ def run_backtest(df, strategy, cost_bps, symbol="", random_trigger_rate=0.0015):
                 position = {
                     "entry_price": entry_price,
                     "entry_idx": i + 1,
-                    "sl": entry_price * (1 - atr_pct * ATR_SL_MULT),
+                    "sl": entry_price * (1 - atr_pct * sl_mult),
                     "tp": entry_price * (1 + atr_pct * ATR_TP_MULT),
                     "atr_pct": atr_pct,
                 }
@@ -552,27 +623,54 @@ def win_rate(trades):
 # ──────────────────────────────────────────────────────────────────
 def main():
     print("=" * 70)
-    print("SHAHKAR ROUND 2 BACKTEST — New Structural Strategies")
+    print("SHAHKAR ROUND 3 BACKTEST — Pullback Iteration + Mean Reversion Debug")
     print("=" * 70)
-    print("Old multi-indicator scoring is retired (PF 0.206, tied with random).")
-    print("Testing: Pullback Entry | Squeeze Breakout | Mean Reversion | Random")
+    print("Round 1: old multi-indicator scoring PF 0.206, tied with random. Dead.")
+    print("Round 2: pullback PF 0.945 (beat random 0.167), squeeze/mean_rev failed,")
+    print("         mean_reversion's 2200 trades flagged as a bug (fixed: RSI was")
+    print("         using a flat average instead of proper Wilder smoothing).")
+    print("Round 3: pullback | pullback_strict (GLM tweaks) | mean_reversion (fixed) | random")
     print("=" * 70)
 
     symbols = get_candidate_pairs(top_n=60)
 
     print(f"\nDownloading + filtering {len(symbols)} pairs (survivorship filter: max single-candle move < {MAX_SINGLE_CANDLE_MOVE:.0%})...")
-    clean_data = {}
+    raw_data = {}
     for sym in symbols:
         df = download_klines_safe(sym, days=DAYS_BACK)
         if passes_survivorship_filter(df):
-            clean_data[sym] = df
+            raw_data[sym] = df
             print(f"  KEEP  {sym}  ({len(df)} candles)")
         else:
             reason = "insufficient data" if df is None or len(df) < 50 else "extreme candle detected"
             print(f"  DROP  {sym}  ({reason})")
         time.sleep(0.1)
 
-    print(f"\n{len(clean_data)}/{len(symbols)} pairs survived filtering.")
+    print(f"\n{len(raw_data)}/{len(symbols)} pairs survived the survivorship filter.")
+    if len(raw_data) < 10:
+        print("FATAL: too few pairs survived. Aborting.")
+        return
+
+    # ── DATA INTEGRITY FILTER (GLM-requested) ──────────────────────
+    # Reject any pair with significantly fewer candles than expected —
+    # this catches network-timeout-truncated downloads (e.g. EURUSDT with
+    # 3000 candles, LINKUSDT with 1000) that the survivorship filter alone
+    # didn't catch, since a short calm window can pass it without being
+    # representative of the full 90-day period.
+    candle_counts = [len(df) for df in raw_data.values()]
+    median_count = float(np.median(candle_counts))
+    integrity_threshold = 0.90 * median_count
+    print(f"\nData integrity filter: median candle count = {median_count:.0f}, "
+          f"rejecting pairs below {integrity_threshold:.0f} (90% of median)...")
+
+    clean_data = {}
+    for sym, df in raw_data.items():
+        if len(df) >= integrity_threshold:
+            clean_data[sym] = df
+        else:
+            print(f"  REJECT  {sym}  ({len(df)} candles, below 90% of median {median_count:.0f} — likely truncated by a network timeout)")
+
+    print(f"{len(clean_data)}/{len(raw_data)} pairs survived the data integrity filter.")
     if len(clean_data) < 10:
         print("FATAL: too few pairs survived. Aborting.")
         return
@@ -583,15 +681,26 @@ def main():
     print("\nRunning backtests across 4 strategies x 3 cost scenarios...")
     final_table = []
 
-    strategies = ["pullback", "squeeze_breakout", "mean_reversion", "random"]
+    strategy_configs = [
+        # (strategy_name, sl_atr_mult_override, debug_mean_reversion)
+        ("pullback",        None, False),  # original: volume < 80%, SL 1.5x ATR
+        ("pullback_strict", 1.2,  False),   # GLM Tweak 1+2: volume < 50%, SL 1.2x ATR
+        ("mean_reversion",  None, True),    # debug=True prints RSI at each trigger to verify the fix
+        ("random",          None, False),
+    ]
 
-    for strategy in strategies:
+    for strategy, sl_override, debug_mr in strategy_configs:
         print(f"\n--- Strategy: {strategy} ---")
+        if debug_mr:
+            print("  (debug mode: printing RSI value at each mean_reversion trigger)")
 
         for scenario_name, cost_bps in COST_SCENARIOS.items():
             all_trades = []
             for sym, df in clean_data.items():
-                trades = run_backtest(df, strategy, cost_bps=cost_bps, symbol=sym)
+                trades = run_backtest(
+                    df, strategy, cost_bps=cost_bps, symbol=sym,
+                    sl_atr_mult=sl_override, debug_mean_reversion=debug_mr,
+                )
                 for t in trades:
                     t["symbol"] = sym
                 all_trades.extend(trades)
@@ -616,8 +725,7 @@ def main():
     df_results = pd.DataFrame(final_table)
     print(df_results.to_string(index=False))
 
-    # FIX: save in local working directory, not /tmp (Windows-incompatible)
-    out_path = "backtest_results.json"
+    out_path = "backtest_results_round3.json"
     with open(out_path, "w") as f:
         json.dump(final_table, f, indent=2)
     print(f"\nSaved results to {out_path}")
