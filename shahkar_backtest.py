@@ -387,6 +387,131 @@ def get_btc_trend_series(btc_df):
 LARGE_CAP_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"}
 
 
+# ──────────────────────────────────────────────────────────────────
+# PAIR TRADING / STATISTICAL ARBITRAGE (Gemini suggestion, Round 4)
+# ──────────────────────────────────────────────────────────────────
+# Concept: two historically-correlated coins' price RATIO should be
+# mean-reverting. When the ratio drifts >2 std-devs from its rolling
+# mean, short the outperformer / long the underperformer, expecting
+# convergence. This is spot-only (no futures/shorting needed if we
+# only take the "buy the underperformer" leg, which is the long-only
+# adaptation used below per the user's no-futures constraint).
+PAIR_LOOKBACK_CANDLES = 5760   # 20 days * 288 candles/day at 5m
+PAIR_ENTRY_ZSCORE     = 2.0
+PAIR_EXIT_ZSCORE      = 0.5    # close when spread reverts most of the way to the mean
+PAIR_MIN_CORRELATION  = 0.80   # only trade pairs that are genuinely correlated
+PAIR_TIMEOUT_CANDLES  = 288    # 24 hours — if it hasn't reverted by then, thesis is questionable
+
+
+def find_correlated_pairs(clean_data, min_correlation=PAIR_MIN_CORRELATION, max_pairs=15):
+    """
+    Scans all downloaded symbols for pairs whose close-price returns are
+    highly correlated (using the overlapping date range), as a stand-in
+    for "these two assets tend to move together." Returns a list of
+    (symbol_a, symbol_b, correlation) tuples, sorted by correlation desc.
+    """
+    symbols = list(clean_data.keys())
+    candidates = []
+    for i in range(len(symbols)):
+        for j in range(i + 1, len(symbols)):
+            sym_a, sym_b = symbols[i], symbols[j]
+            df_a, df_b = clean_data[sym_a], clean_data[sym_b]
+            n = min(len(df_a), len(df_b))
+            if n < 1000:
+                continue
+            returns_a = df_a["close"].values[-n:]
+            returns_b = df_b["close"].values[-n:]
+            ret_a_pct = np.diff(returns_a) / returns_a[:-1]
+            ret_b_pct = np.diff(returns_b) / returns_b[:-1]
+            if np.std(ret_a_pct) == 0 or np.std(ret_b_pct) == 0:
+                continue
+            corr = np.corrcoef(ret_a_pct, ret_b_pct)[0, 1]
+            if corr >= min_correlation:
+                candidates.append((sym_a, sym_b, corr))
+    candidates.sort(key=lambda x: x[2], reverse=True)
+    return candidates[:max_pairs]
+
+
+def run_pair_trade_backtest(df_a, df_b, cost_bps, sym_a="A", sym_b="B"):
+    """
+    Long-only adaptation (no shorting/futures): when the price ratio
+    (A/B) drops far BELOW its rolling mean (A is cheap relative to B),
+    buy A expecting the ratio to revert upward. Exit when the ratio
+    reverts most of the way back, hits a stop, or times out.
+
+    This only trades one leg (buying the relatively cheap asset), since
+    the user does not want futures/short positions. This means it is a
+    weaker approximation of true pair trading (which profits from BOTH
+    legs converging), but stays entirely within spot-only constraints.
+    """
+    n = min(len(df_a), len(df_b))
+    closes_a = df_a["close"].values[-n:]
+    closes_b = df_b["close"].values[-n:]
+    opens_a = df_a["open"].values[-n:]
+    highs_a = df_a["high"].values[-n:]
+    lows_a = df_a["low"].values[-n:]
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where(closes_b > 0, closes_a / closes_b, np.nan)
+
+    ratio_series = pd.Series(ratio)
+    rolling_mean = ratio_series.rolling(window=PAIR_LOOKBACK_CANDLES).mean().values
+    rolling_std = ratio_series.rolling(window=PAIR_LOOKBACK_CANDLES).std().values
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        zscore = np.where(rolling_std > 0, (ratio - rolling_mean) / rolling_std, np.nan)
+
+    trades = []
+    position = None
+
+    for i in range(PAIR_LOOKBACK_CANDLES, n - 1):
+        if np.isnan(zscore[i]):
+            continue
+
+        if position is None:
+            # Ratio far BELOW mean -> A is cheap relative to B -> buy A, expect reversion up
+            if zscore[i] <= -PAIR_ENTRY_ZSCORE:
+                atr_pct = atr_14(
+                    highs_a[max(0, i - 20):i + 1],
+                    lows_a[max(0, i - 20):i + 1],
+                    closes_a[max(0, i - 20):i + 1],
+                )
+                if atr_pct is None or atr_pct <= 0:
+                    continue
+                entry_price = opens_a[i + 1]  # no look-ahead: next candle's open
+                position = {
+                    "entry_price": entry_price,
+                    "entry_idx": i + 1,
+                    "sl": entry_price * (1 - atr_pct * ATR_SL_MULT),
+                    "entry_zscore": zscore[i],
+                }
+        else:
+            row_high = highs_a[i]
+            row_low = lows_a[i]
+            row_close = closes_a[i]
+            exit_reason = None
+            exit_price = None
+
+            if row_low <= position["sl"]:
+                exit_reason, exit_price = "SL", position["sl"]
+            elif not np.isnan(zscore[i]) and abs(zscore[i]) <= PAIR_EXIT_ZSCORE:
+                exit_reason, exit_price = "REVERSION", row_close
+            elif (i - position["entry_idx"]) > PAIR_TIMEOUT_CANDLES:
+                exit_reason, exit_price = "TIMEOUT", row_close
+
+            if exit_reason:
+                pnl_pct = calculate_pnl(position["entry_price"], exit_price, cost_bps)
+                trades.append({
+                    "pnl_pct": pnl_pct,
+                    "exit_reason": exit_reason,
+                    "entry_zscore": position["entry_zscore"],
+                    "pair": f"{sym_a}/{sym_b}",
+                })
+                position = None
+
+    return trades
+
+
 def check_pullback_entry(i, closes, opens, volumes, volume_threshold=0.8):
     """
     Strategy 1: Pullback Entry (long-only continuation)
@@ -624,13 +749,15 @@ def win_rate(trades):
 # ──────────────────────────────────────────────────────────────────
 def main():
     print("=" * 70)
-    print("SHAHKAR ROUND 3 BACKTEST — Pullback Iteration + Mean Reversion Debug")
+    print("SHAHKAR ROUND 4 BACKTEST — Pair Trading (Gemini suggestion)")
     print("=" * 70)
     print("Round 1: old multi-indicator scoring PF 0.206, tied with random. Dead.")
-    print("Round 2: pullback PF 0.945 (beat random 0.167), squeeze/mean_rev failed,")
-    print("         mean_reversion's 2200 trades flagged as a bug (fixed: RSI was")
-    print("         using a flat average instead of proper Wilder smoothing).")
-    print("Round 3: pullback | pullback_strict (GLM tweaks) | mean_reversion (fixed) | random")
+    print("Round 2: pullback PF 0.945 on partial data -> confirmed data artifact.")
+    print("Round 3: clean-data pullback PF 0.666, mean_reversion fixed but PF 0.197")
+    print("         (worse than random). 0bps theoretical test: pullback PF 0.898 —")
+    print("         confirmed NO logic edge even with zero costs (GLM verdict).")
+    print("Round 4: spot-only pair trading (long-only adaptation, no futures/shorting)")
+    print("         on correlated coin pairs, per Gemini's suggestion.")
     print("=" * 70)
 
     symbols = get_candidate_pairs(top_n=60)
@@ -652,12 +779,7 @@ def main():
         print("FATAL: too few pairs survived. Aborting.")
         return
 
-    # ── DATA INTEGRITY FILTER (GLM-requested) ──────────────────────
-    # Reject any pair with significantly fewer candles than expected —
-    # this catches network-timeout-truncated downloads (e.g. EURUSDT with
-    # 3000 candles, LINKUSDT with 1000) that the survivorship filter alone
-    # didn't catch, since a short calm window can pass it without being
-    # representative of the full 90-day period.
+    # ── DATA INTEGRITY FILTER ──────────────────────────────────────
     candle_counts = [len(df) for df in raw_data.values()]
     median_count = float(np.median(candle_counts))
     integrity_threshold = 0.90 * median_count
@@ -676,38 +798,57 @@ def main():
         print("FATAL: too few pairs survived. Aborting.")
         return
 
-    n_large_cap = sum(1 for s in clean_data if s in LARGE_CAP_SYMBOLS)
-    print(f"Large-cap pairs available for Mean Reversion strategy: {n_large_cap}/{len(LARGE_CAP_SYMBOLS)}")
+    # ── PAIR TRADING (Round 4) ─────────────────────────────────────
+    print("\n" + "=" * 70)
+    print("Scanning for correlated pairs (return correlation >= "
+          f"{PAIR_MIN_CORRELATION})...")
+    pairs = find_correlated_pairs(clean_data)
+    if not pairs:
+        print(f"No pairs found with correlation >= {PAIR_MIN_CORRELATION}. "
+              "Lowering bar is possible but means weaker pair-trading thesis.")
+    else:
+        print(f"Found {len(pairs)} correlated pairs (showing top 15):")
+        for sym_a, sym_b, corr in pairs:
+            print(f"  {sym_a:12s} <-> {sym_b:12s}  correlation={corr:.3f}")
 
-    print("\nRunning backtests across 2 strategies x 4 cost scenarios (incl. theoretical 0bps)...")
-    final_table = []
+    print("\nRunning pair-trading backtest across cost scenarios...")
+    pair_results_table = []
+    for scenario_name, cost_bps in COST_SCENARIOS.items():
+        all_trades = []
+        for sym_a, sym_b, corr in pairs:
+            trades = run_pair_trade_backtest(
+                clean_data[sym_a], clean_data[sym_b], cost_bps=cost_bps,
+                sym_a=sym_a, sym_b=sym_b,
+            )
+            all_trades.extend(trades)
 
-    strategy_configs = [
-        # (strategy_name, sl_atr_mult_override, debug_mean_reversion)
-        ("pullback", None, False),  # GLM Q4 verification: does removing ALL costs reveal a real edge?
-        ("random",   None, False),  # baseline for comparison
-    ]
+        n_trades = len(all_trades)
+        wr = win_rate(all_trades)
+        pf = profit_factor(all_trades)
+        pair_results_table.append({
+            "strategy": "pair_trading",
+            "scenario": scenario_name,
+            "n_trades": n_trades,
+            "win_rate_pct": round(wr * 100, 1),
+            "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
+        })
+        print(f"  {scenario_name}: {n_trades} trades, win_rate={wr*100:.1f}%, "
+              f"PF={pf if pf == float('inf') else round(pf, 3)}")
 
-    for strategy, sl_override, debug_mr in strategy_configs:
-        print(f"\n--- Strategy: {strategy} ---")
-        if debug_mr:
-            print("  (debug mode: printing RSI value at each mean_reversion trigger)")
+    # ── Also run pullback + random for direct comparison ──────────
+    print("\nRunning pullback + random for side-by-side comparison...")
+    final_table = list(pair_results_table)
 
+    for strategy in ["pullback", "random"]:
         for scenario_name, cost_bps in COST_SCENARIOS.items():
             all_trades = []
             for sym, df in clean_data.items():
-                trades = run_backtest(
-                    df, strategy, cost_bps=cost_bps, symbol=sym,
-                    sl_atr_mult=sl_override, debug_mean_reversion=debug_mr,
-                )
-                for t in trades:
-                    t["symbol"] = sym
+                trades = run_backtest(df, strategy, cost_bps=cost_bps, symbol=sym)
                 all_trades.extend(trades)
 
             n_trades = len(all_trades)
             wr = win_rate(all_trades)
             pf = profit_factor(all_trades)
-
             final_table.append({
                 "strategy": strategy,
                 "scenario": scenario_name,
@@ -715,27 +856,27 @@ def main():
                 "win_rate_pct": round(wr * 100, 1),
                 "profit_factor": round(pf, 3) if pf != float("inf") else "inf",
             })
-            print(f"  {scenario_name}: {n_trades} trades, win_rate={wr*100:.1f}%, PF={pf if pf==float('inf') else round(pf,3)}")
 
     print("\n" + "=" * 70)
-    print("RESULTS — 4 strategies x 3 cost scenarios")
+    print("RESULTS — pair_trading vs pullback vs random, across cost scenarios")
     print("=" * 70)
 
     df_results = pd.DataFrame(final_table)
     print(df_results.to_string(index=False))
 
-    out_path = "backtest_results_round3.json"
+    out_path = "backtest_results_round4_pairtrading.json"
     with open(out_path, "w") as f:
         json.dump(final_table, f, indent=2)
     print(f"\nSaved results to {out_path}")
 
     print("\n" + "=" * 70)
     print("VERDICT GUIDE:")
-    print("  Any strategy's Best_Case PF < 1.0  -> dead on arrival, no edge even theoretically.")
-    print("  Base_Case PF > 1.10 and Stress_Case PF > 1.00 -> genuine, robust edge. Worth pursuing.")
-    print("  Base_Case PF > 1.10 but Stress_Case PF < 1.00 -> edge exists but fragile execution-dependent.")
-    print("  Strategy doesn't beat Random -> no real edge, structurally indistinguishable from chance.")
-    print("  Low n_trades (<30) on any strategy -> not enough data to trust the PF number yet.")
+    print("  Best_Case PF < 1.0 -> dead on arrival, no edge even theoretically.")
+    print("  Base_Case PF > 1.10 and Stress_Case PF > 1.00 -> genuine, robust edge.")
+    print("  Doesn't beat Random -> no real edge, structurally indistinguishable from chance.")
+    print("  NOTE: this is a LONG-ONLY adaptation of pair trading (no shorting/futures),")
+    print("  which is structurally weaker than true pair trading. A negative result here")
+    print("  does not fully rule out pair trading with a short leg — only this adaptation.")
     print("=" * 70)
 
 
